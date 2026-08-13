@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import random
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 
@@ -71,7 +72,12 @@ def squad2_rows_with_stats(
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     from datasets import load_dataset
 
-    dataset = load_dataset("rajpurkar/squad_v2", split=split)
+    try:
+        dataset = load_dataset("rajpurkar/squad_v2", split=split)
+    except ValueError as error:
+        if "Feature type 'List' not found" not in str(error):
+            raise
+        dataset = _read_cached_squad2_arrow(split)
     return squad2_rows_from_items(
         dataset,
         split=split,
@@ -82,6 +88,27 @@ def squad2_rows_with_stats(
         seed=seed,
         validation=validation,
     )
+
+
+def _read_cached_squad2_arrow(split: str) -> list[dict[str, Any]]:
+    """Read old cached SQuAD Arrow files when datasets 3.6 cannot decode List metadata."""
+    import pyarrow as pa
+    from datasets import config
+
+    candidates = sorted(
+        Path(config.HF_DATASETS_CACHE).glob(
+            f"rajpurkar___squad_v2/**/squad_v2-{split}.arrow"
+        )
+    )
+    if not candidates:
+        raise FileNotFoundError(f"cached SQuAD2 Arrow split not found: {split}")
+    with pa.memory_map(str(candidates[-1]), "r") as source:
+        try:
+            table = pa.ipc.open_stream(source).read_all()
+        except (pa.ArrowInvalid, pa.ArrowIOError):
+            source.seek(0)
+            table = pa.ipc.open_file(source).read_all()
+    return table.to_pylist()
 
 
 def squad2_rows_from_items(

@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from scripts.train import _gold_answer_tokens, _length_bucket
+from scripts.train import _gold_answer_span, _gold_answer_tokens, _length_bucket
 
 
 class TrainMetricTests(unittest.TestCase):
@@ -26,6 +26,12 @@ class TrainMetricTests(unittest.TestCase):
         self.assertEqual(_length_bucket(6), "5-6")
         self.assertEqual(_length_bucket(7), "7-10")
         self.assertEqual(_length_bucket(11), "11+")
+
+    def test_gold_span_uses_aligned_source_positions(self) -> None:
+        batch = {
+            "gold_copy_positions": torch.tensor([[8, 9, -1]]),
+        }
+        self.assertEqual(_gold_answer_span(batch, 0), [8, 9])
 
 
 if __name__ == "__main__":

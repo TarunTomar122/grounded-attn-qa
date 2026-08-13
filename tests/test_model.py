@@ -144,6 +144,31 @@ class ModelTests(unittest.TestCase):
         self.assertGreater(loss.pointer_position.item(), 0.0)
         self.assertGreater(loss.total.item(), loss.sequence.item())
 
+    def test_start_head_loss_only_scores_context_positions(self) -> None:
+        output = self.model(
+            self.source,
+            self.types,
+            self.valid,
+            self.context,
+            torch.tensor([[1, 11, 13]]),
+            torch.ones((1, 3), dtype=torch.bool),
+        )
+        loss = grounded_loss(
+            output,
+            self.source,
+            torch.tensor([[11, 13, 2]]),
+            torch.ones((1, 3), dtype=torch.bool),
+            torch.tensor([True]),
+            lambda_answerability=0.0,
+            copy_only=True,
+            eos_id=self.cfg.eos_id,
+            gold_copy_positions=torch.tensor([[6, 7, -1]]),
+            lambda_start=1.0,
+            context_mask=self.context,
+        )
+        self.assertGreater(loss.start_head.item(), 0.0)
+        self.assertGreater(loss.total.item(), loss.sequence.item())
+
     def test_rope_accepts_configured_head_dimension(self) -> None:
         rope = RotaryEmbedding(self.cfg.head_dim)
         q = torch.randn(2, self.cfg.n_heads, 5, self.cfg.head_dim)

@@ -420,6 +420,31 @@ def a2a_training_row(
     return {**row, "metadata": {**row["metadata"], "a2a_mix": "a1d_replay"}}
 
 
+def a2b_training_row(
+    seed: int,
+    index: int,
+    curriculum_step: int,
+    squad_rows: list[dict],
+) -> dict:
+    """A2b uses extra procedural replay after A2a synthetic retention collapsed."""
+    bucket = index % 20
+    if bucket < 13:
+        row = squad_rows[(seed * 1_000_003 + index * 97 + curriculum_step) % len(squad_rows)]
+        return {**row, "metadata": {**row["metadata"], "a2b_mix": "squad2"}}
+    if bucket < 18:
+        row = procedural_copy_row(seed + 91_007, index, split="a2b_a1_replay", entity_set="train", hard_distractors=True)
+        return {**row, "metadata": {**row["metadata"], "a2b_mix": "a1_replay"}}
+    row = a1c_row(
+        seed + 17_003,
+        index,
+        prefix_level=SHARED_PREFIX_LEVELS[(index + curriculum_step) % len(SHARED_PREFIX_LEVELS)],
+        candidate_count=BINDING_CANDIDATE_COUNTS[(index + curriculum_step) % len(BINDING_CANDIDATE_COUNTS)],
+        prefix_mode="shared",
+        split="a2b_a1d_replay",
+    )
+    return {**row, "metadata": {**row["metadata"], "a2b_mix": "a1d_replay"}}
+
+
 def a1c_validation_splits(n: int = 512, seed: int = 42) -> dict[str, list[dict]]:
     """Fixed A1c controls, prefix levels, hard distractors, and candidate counts."""
     return {

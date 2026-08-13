@@ -14,6 +14,9 @@ class LossOutput:
     sequence: torch.Tensor
     answerability: torch.Tensor
     pointer_position: torch.Tensor
+    pointer_first: torch.Tensor
+    pointer_continuation: torch.Tensor
+    start_head: torch.Tensor
 
 
 def sequence_nll(
@@ -55,6 +58,9 @@ def grounded_loss(
     eos_id: int | None = None,
     gold_copy_positions: torch.Tensor | None = None,
     lambda_pointer_position: float = 0.0,
+    context_mask: torch.Tensor | None = None,
+    lambda_start: float = 0.0,
+    first_pointer_weight: float = 1.0,
 ) -> LossOutput:
     positive_mask = target_valid & answerable[:, None]
     sequence = sequence_nll(
@@ -69,15 +75,49 @@ def grounded_loss(
         output.answerability_logits,
         answerable.float(),
     )
-    if lambda_pointer_position and gold_copy_positions is None:
-        raise ValueError("pointer-position loss needs gold_copy_positions")
+    if (lambda_pointer_position or lambda_start) and gold_copy_positions is None:
+        raise ValueError("pointer and start losses need gold_copy_positions")
     if gold_copy_positions is None:
         pointer_position = sequence.new_zeros(())
+        pointer_first = sequence.new_zeros(())
+        pointer_continuation = sequence.new_zeros(())
+        start_head = sequence.new_zeros(())
     else:
         pointer_mask = target_valid & answerable[:, None] & gold_copy_positions.ge(0)
         safe_positions = gold_copy_positions.clamp_min(0)
         pointer_probability = output.copy_position_probs.gather(-1, safe_positions[..., None]).squeeze(-1)
         pointer_loss = -pointer_probability.clamp_min(1.0e-8).log()
-        pointer_position = (pointer_loss * pointer_mask).sum() / pointer_mask.sum().clamp_min(1)
-    total = sequence + lambda_answerability * answerability + lambda_pointer_position * pointer_position
-    return LossOutput(total=total, sequence=sequence, answerability=answerability, pointer_position=pointer_position)
+        first_mask = pointer_mask & torch.arange(target_ids.shape[1], device=target_ids.device).eq(0)[None, :]
+        continuation_mask = pointer_mask & ~torch.arange(target_ids.shape[1], device=target_ids.device).eq(0)[None, :]
+        pointer_first = (pointer_loss * first_mask).sum() / first_mask.sum().clamp_min(1)
+        pointer_continuation = (pointer_loss * continuation_mask).sum() / continuation_mask.sum().clamp_min(1)
+        weighted_count = first_pointer_weight * first_mask.sum() + continuation_mask.sum()
+        pointer_position = (
+            first_pointer_weight * (pointer_loss * first_mask).sum() + (pointer_loss * continuation_mask).sum()
+        ) / weighted_count.clamp_min(1)
+        if context_mask is None and lambda_start:
+            raise ValueError("start loss needs context_mask")
+        if context_mask is None:
+            start_head = sequence.new_zeros(())
+        else:
+            start_mask = answerable & gold_copy_positions[:, 0].ge(0)
+            start_logits = output.answer_start_logits.masked_fill(~context_mask, torch.finfo(output.answer_start_logits.dtype).min)
+            start_head = F.cross_entropy(
+                start_logits[start_mask],
+                gold_copy_positions[start_mask, 0],
+            ) if start_mask.any() else sequence.new_zeros(())
+    total = (
+        sequence
+        + lambda_answerability * answerability
+        + lambda_pointer_position * pointer_position
+        + lambda_start * start_head
+    )
+    return LossOutput(
+        total=total,
+        sequence=sequence,
+        answerability=answerability,
+        pointer_position=pointer_position,
+        pointer_first=pointer_first,
+        pointer_continuation=pointer_continuation,
+        start_head=start_head,
+    )

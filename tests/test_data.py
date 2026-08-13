@@ -14,6 +14,7 @@ from grounded_qa.synthetic import (
     a1c_row,
     a1d_training_row,
     a2a_training_row,
+    a2b_training_row,
     diversity_stats,
     entity_binding_training_row,
     entity_binding_validation_splits,
@@ -141,6 +142,11 @@ class DataTests(unittest.TestCase):
         squad = [procedural_copy_row(7, 0)]
         rows = [a2a_training_row(42, index, curriculum_step=1, squad_rows=squad) for index in range(100)]
         self.assertEqual(Counter(row["metadata"]["a2a_mix"] for row in rows), Counter({"squad2": 70, "a1_replay": 20, "a1d_replay": 10}))
+
+    def test_a2b_training_mixture_is_65_25_10(self) -> None:
+        squad = [procedural_copy_row(7, 0)]
+        rows = [a2b_training_row(42, index, curriculum_step=1, squad_rows=squad) for index in range(100)]
+        self.assertEqual(Counter(row["metadata"]["a2b_mix"] for row in rows), Counter({"squad2": 65, "a1_replay": 25, "a1d_replay": 10}))
 
     def test_encoder_marks_only_context_text_as_copyable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
