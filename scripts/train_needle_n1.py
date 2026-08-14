@@ -37,13 +37,28 @@ def batch(data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.de
     return source, source_valid, decoder, target, target_valid
 
 
-def losses(logits: torch.Tensor, target: torch.Tensor, valid: torch.Tensor, z_weight: float) -> tuple[torch.Tensor, ...]:
+def losses(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    valid: torch.Tensor,
+    z_weight: float,
+    first_token_weight: float,
+    eos_token_weight: float,
+) -> tuple[torch.Tensor, ...]:
     selected_logits = logits[valid].float()
     selected_target = target[valid]
-    ce = F.cross_entropy(selected_logits, selected_target)
+    per_token_ce = F.cross_entropy(selected_logits, selected_target, reduction="none")
+    first_mask = valid.nonzero()[:, 1].eq(0)
+    eos_mask = selected_target.eq(EOS_ID)
+    weights = 1 + first_mask * (first_token_weight - 1) + eos_mask * (eos_token_weight - 1)
+    ce = (per_token_ce * weights).sum() / weights.sum()
     z = selected_logits.logsumexp(dim=-1).square().mean()
-    accuracy = selected_logits.argmax(dim=-1).eq(selected_target).float().mean()
-    return ce + z_weight * z, ce, z, accuracy
+    correct = selected_logits.argmax(dim=-1).eq(selected_target)
+    accuracy = correct.float().mean()
+    first_ce = per_token_ce[first_mask].mean()
+    first_accuracy = correct[first_mask].float().mean()
+    eos_accuracy = correct[eos_mask].float().mean()
+    return ce + z_weight * z, ce, z, accuracy, first_ce, first_accuracy, eos_accuracy
 
 
 def lr_at(step: int, total_steps: int, peak: float) -> float:
@@ -58,32 +73,45 @@ def lr_at(step: int, total_steps: int, peak: float) -> float:
 
 
 @torch.inference_mode()
-def evaluate(model, data: dict[str, torch.Tensor], device: torch.device, batch_size: int, z_weight: float) -> dict[str, float]:
+def evaluate(model, data: dict[str, torch.Tensor], device: torch.device, batch_size: int, z_weight: float, first_token_weight: float, eos_token_weight: float) -> dict[str, float]:
     model.eval()
-    totals = {"tokens": 0, "loss": 0.0, "ce": 0.0, "z": 0.0, "correct": 0.0, "wrong_ce": 0.0}
+    totals = {"tokens": 0, "weighted_tokens": 0.0, "rows": 0, "ce": 0.0, "z": 0.0, "correct": 0.0, "first_ce": 0.0, "first_correct": 0.0, "eos_correct": 0.0, "wrong_ce": 0.0}
     for start in range(0, len(data["source_ids"]), batch_size):
         indices = torch.arange(start, min(start + batch_size, len(data["source_ids"])))
         source, source_valid, decoder, target, valid = batch(data, indices, device)
         logits = model(source, source_valid, decoder, valid)
-        total, ce, z, accuracy = losses(logits, target, valid, z_weight)
+        total, ce, z, accuracy, first_ce, first_accuracy, eos_accuracy = losses(logits, target, valid, z_weight, first_token_weight, eos_token_weight)
         wrong_logits = model(source.roll(1, 0), source_valid.roll(1, 0), decoder, valid)
-        _, wrong_ce, _, _ = losses(wrong_logits, target, valid, 0.0)
+        _, wrong_ce, *_ = losses(wrong_logits, target, valid, 0.0, first_token_weight, eos_token_weight)
         tokens = int(valid.sum())
+        rows = len(indices)
+        weighted_tokens = tokens + (first_token_weight + eos_token_weight - 2) * rows
         totals["tokens"] += tokens
-        totals["loss"] += float(total) * tokens
-        totals["ce"] += float(ce) * tokens
+        totals["weighted_tokens"] += weighted_tokens
+        totals["rows"] += rows
+        totals["ce"] += float(ce) * weighted_tokens
         totals["z"] += float(z) * tokens
         totals["correct"] += float(accuracy) * tokens
-        totals["wrong_ce"] += float(wrong_ce) * tokens
+        totals["first_ce"] += float(first_ce) * rows
+        totals["first_correct"] += float(first_accuracy) * rows
+        totals["eos_correct"] += float(eos_accuracy) * rows
+        totals["wrong_ce"] += float(wrong_ce) * weighted_tokens
     tokens = max(totals["tokens"], 1)
+    weighted_tokens = max(totals["weighted_tokens"], 1)
+    ce = totals["ce"] / weighted_tokens
+    z = totals["z"] / tokens
+    wrong_ce = totals["wrong_ce"] / weighted_tokens
     model.train()
     return {
-        "val/loss": totals["loss"] / tokens,
-        "val/ce": totals["ce"] / tokens,
-        "val/z": totals["z"] / tokens,
+        "val/loss": ce + z_weight * z,
+        "val/ce": ce,
+        "val/z": z,
         "val/token_accuracy": totals["correct"] / tokens,
-        "val/wrong_context_ce": totals["wrong_ce"] / tokens,
-        "val/context_dependency_gap": (totals["wrong_ce"] - totals["ce"]) / tokens,
+        "val/first_token_ce": totals["first_ce"] / totals["rows"],
+        "val/first_token_accuracy": totals["first_correct"] / totals["rows"],
+        "val/eos_accuracy": totals["eos_correct"] / totals["rows"],
+        "val/wrong_context_ce": wrong_ce,
+        "val/context_dependency_gap": wrong_ce - ce,
     }
 
 
@@ -148,6 +176,8 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--z-loss", type=float, default=1e-4)
+    parser.add_argument("--first-token-weight", type=float, default=20.0)
+    parser.add_argument("--eos-token-weight", type=float, default=1.0)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--eval-every", type=int, default=500)
     parser.add_argument("--checkpoint-every", type=int, default=1000)
@@ -191,9 +221,9 @@ def main() -> None:
     if args.wandb:
         import wandb
         config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
-        run = wandb.init(project="grounded-attn-qa", group="needle-rag", name=f"needle26m-n1-lr{args.lr:g}", config={**config, "train_rows": len(train["source_ids"]), "validation_rows": len(validation["source_ids"]), "total_steps": total_steps})
+        run = wandb.init(project="grounded-attn-qa", group="needle-rag", name=f"needle26m-n1-lr{args.lr:g}-first{args.first_token_weight:g}-eos{args.eos_token_weight:g}", config={**config, "train_rows": len(train["source_ids"]), "validation_rows": len(validation["source_ids"]), "total_steps": total_steps})
 
-    initial = evaluate(model, validation, device, args.batch_size, args.z_loss)
+    initial = evaluate(model, validation, device, args.batch_size, args.z_loss, args.first_token_weight, args.eos_token_weight)
     probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device)
     print(json.dumps({"step": step, **initial, **probe_metrics, "examples": probe_rows[:2]}, ensure_ascii=False), flush=True)
     if run:
@@ -215,7 +245,7 @@ def main() -> None:
                 group["lr"] = lr
             optimizer.zero_grad(set_to_none=True)
             logits = model(source, source_valid, decoder, valid)
-            loss, ce, z, accuracy = losses(logits, target, valid, args.z_loss)
+            loss, ce, z, accuracy, first_ce, first_accuracy, eos_accuracy = losses(logits, target, valid, args.z_loss, args.first_token_weight, args.eos_token_weight)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -230,6 +260,9 @@ def main() -> None:
                     "train/ce": float(ce.detach()),
                     "train/z": float(z.detach()),
                     "train/token_accuracy": float(accuracy.detach()),
+                    "train/first_token_ce": float(first_ce.detach()),
+                    "train/first_token_accuracy": float(first_accuracy.detach()),
+                    "train/eos_accuracy": float(eos_accuracy.detach()),
                     "train/grad_norm": float(grad_norm),
                     "train/lr": lr,
                     "system/actual_tokens_per_second": (seen_tokens - last_log_tokens) / max(interval, 1e-6),
@@ -244,7 +277,7 @@ def main() -> None:
                 last_log_step = step
                 last_log_tokens = seen_tokens
             if step % args.eval_every == 0 or step == total_steps:
-                metrics = evaluate(model, validation, device, args.batch_size, args.z_loss)
+                metrics = evaluate(model, validation, device, args.batch_size, args.z_loss, args.first_token_weight, args.eos_token_weight)
                 probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device)
                 print(json.dumps({"step": step, **metrics, **probe_metrics, "examples": probe_rows[:2]}, ensure_ascii=False), flush=True)
                 if run:

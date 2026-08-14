@@ -132,3 +132,24 @@ and its span semantics are verified.
 3. Benchmark N1 throughput and stable batch size.
 4. Train N1 with query + evidence to raw answer CE and a small z-loss.
 5. Fork the same N1 checkpoint into matched N2-GEN and N2-PG runs.
+
+### N1 smoke gate: sequence boundaries
+
+The first 394-train / 5-validation-row overfit gate exposed a mismatch hidden
+by ordinary teacher-forced token CE: long answers underweighted both the first
+answer token and EOS. At step 250, the controlled boundary-weight pilot used
+`lr=3e-4`, first-token weight 100, and EOS weight 100:
+
+| Metric | Public N0 | Step 250 |
+|---|---:|---:|
+| Validation first-token accuracy | 0% | 40% |
+| Validation EOS accuracy | 0% | 100% |
+| Validation token accuracy | 7.9% | 34.7% |
+| Wrong-context CE gap | 0.64 | 1.19 |
+| Free-run EOS rate | 60% | 100% |
+| Free-run mean tokens | 206.0 | 16.8 |
+| Free-run EM / token F1 | 0% / 0% | 0% / 12.4% |
+
+W&B run: `50fnkq71`. The EOS intervention worked, and the model no longer emits
+512-token loops. The five-row validation is deliberately treated only as an
+overfit diagnostic; full-corpus validation decides whether N1 proceeds.
