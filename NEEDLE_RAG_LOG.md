@@ -12,6 +12,20 @@ on five QA probes (correct, wrong, empty, and counterfactual contexts) was alway
 
 This makes restoration of contextual question answering the purpose of N1.
 
+A frozen 256-question answerable SQuAD2 validation slice produced the same
+result across 776 free-running inputs:
+
+| Condition | Rows | EM | Token F1 | EOS | Output changed from correct context |
+|---|---:|---:|---:|---:|---:|
+| Correct evidence | 256 | 0% | 0% | 100% | — |
+| Wrong evidence | 256 | 0% | 0% | 100% | 0% |
+| Empty evidence | 256 | 0% | 0% | 100% | 0% |
+| Counterfactual evidence | 8 | 0% | 0% | 100% | — |
+
+Every prediction was the same two-token payload, `<tool_call> []`, followed by
+EOS. N0 therefore has zero measurable context dependence under raw greedy QA
+decoding.
+
 ### Checkpoint
 
 | Item | Verified value |

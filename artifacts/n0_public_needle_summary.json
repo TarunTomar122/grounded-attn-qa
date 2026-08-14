@@ -1,0 +1,24 @@
+{
+  "checkpoint_revision": "5f89b4307696d669c3df1d38ae057e6e1728b107",
+  "evaluation": {
+    "dataset": "rajpurkar/squad_v2",
+    "revision": "3ffb306f725f7d2ce8394bc1873b24868140c412",
+    "split": "validation",
+    "base_examples": 256,
+    "rows": 776,
+    "jsonl_sha256": "8e077daa0479dfeade00f8874e1e4998f8ff2ecdaaed575cf841a165cbb5db4a",
+    "decoding": "raw greedy, EOS decoder start, max 128 new tokens"
+  },
+  "summary": {
+    "correct": {"rows": 256, "em": 0.0, "token_f1": 0.0, "eos_rate": 1.0, "mean_tokens": 2.0},
+    "wrong": {"rows": 256, "em": 0.0, "token_f1": 0.0, "eos_rate": 1.0, "mean_tokens": 2.0},
+    "empty": {"rows": 256, "em": 0.0, "token_f1": 0.0, "eos_rate": 1.0, "mean_tokens": 2.0},
+    "counterfactual": {"rows": 8, "em": 0.0, "token_f1": 0.0, "eos_rate": 1.0, "mean_tokens": 2.0},
+    "context_dependency": {
+      "pairs": 256,
+      "correct_vs_wrong_output_change_rate": 0.0,
+      "correct_vs_empty_output_change_rate": 0.0
+    }
+  },
+  "unique_prediction": "<tool_call> []"
+}

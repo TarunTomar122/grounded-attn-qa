@@ -26,6 +26,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Extract only English SYNTH RAG rows.")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--threads", type=int, default=16)
+    parser.add_argument("--limit-shards", type=int)
     args = parser.parse_args()
 
     revision, files = dataset_files(REVISION)
@@ -33,13 +34,12 @@ def main() -> None:
         f"https://huggingface.co/datasets/{REPO}/resolve/{revision}/{item['path']}"
         for item in files
     ]
+    if args.limit_shards:
+        urls = urls[: args.limit_shards]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     db = duckdb.connect()
     db.execute(f"SET threads={args.threads}")
-    db.execute(
-        "CREATE TEMP VIEW synth AS SELECT * FROM read_parquet(?)",
-        [urls],
-    )
+    urls_sql = "[" + ",".join(f"'{url}'" for url in urls) + "]"
     output_sql = str(args.output).replace("'", "''")
     started = time.time()
     db.execute(
@@ -47,7 +47,7 @@ def main() -> None:
         COPY (
             SELECT synth_id, query, constraints, synthetic_answer,
                    query_seed_url, seed_license, model, words
-            FROM synth
+            FROM read_parquet({urls_sql})
             WHERE exercise = 'rag' AND language = 'en'
         ) TO '{output_sql}' (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 10000)
         """
