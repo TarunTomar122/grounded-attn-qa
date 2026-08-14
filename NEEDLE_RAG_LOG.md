@@ -125,6 +125,12 @@ only 10,639 training rows, far below the official corpus. It will not be treated
 as complete or mixed into N2 until the official simplified release is prepared
 and its span semantics are verified.
 
+HotpotQA remains untouched for multi-hop transfer. GaRAGe is an additional
+evaluation-only candidate: its public release has 2,366 questions, over 35,000
+human-annotated grounding passages, relevance/correctness labels, and
+human-written answers. Its CC-BY-NC-4.0 license and direct grounding focus make
+it suitable for research evaluation, not inclusion in the training mixture.
+
 ### Next measured gates
 
 1. Freeze N0 QA/context-dependence evaluation sets.
@@ -171,3 +177,14 @@ optimizer can fit free-running answer boundaries and content; full N1 will use
 the broad unique corpus and validation-based checkpoint selection. The compiled
 Muon loop sustained about 190k actual / 303k padded tokens/s at 6.42 GB allocated
 VRAM. W&B run: `7q4tq5b3`.
+
+Raw greedy decoding of the first eight training rows at the step-1,000 Muon
+checkpoint produced the exact full gold answer on all eight (`EM=F1=100%`,
+`EOS=100%`, mean 209.9 generated tokens). This confirms the overfit gate in
+free-running mode, not only under teacher forcing.
+
+A matched 250-step boundary ablation retained first-token weight 100 and reduced
+EOS weight from 100 to 20. EOS remained 100% in free generation while validation
+token F1 improved from 32.6% to 36.5%, token accuracy from 50.9% to 53.0%, and
+the wrong-context CE gap from 2.29 to 2.98. Full N1 therefore uses EOS weight 20.
+W&B run: `gvxf1lcm`.
