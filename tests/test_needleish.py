@@ -8,7 +8,7 @@ from grounded_qa.needle_tokenizer import SPECIAL_TOKENS
 from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, NeedleishModel
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
 from grounded_qa.synth_data import encode_synth_row, source_bucket, split_for_source
-from scripts.evaluate_public_needle import generate_batch
+from scripts.evaluate_public_needle import apply_refusal, generate_batch, summarize
 from scripts.train_needle_n2_pointer import calibrate_answerability, swap_contexts
 
 
@@ -180,6 +180,27 @@ def test_pointer_evaluator_decodes() -> None:
     generated = generate_batch(model, source, valid, 2, context)
     assert generated.shape == (1, 2)
     assert set(generated[0].tolist()) <= {5, 6}
+
+
+def test_evaluator_refuses_below_answerability_threshold() -> None:
+    assert apply_refusal("copied answer", 0.8, 0.5) == "copied answer"
+    assert apply_refusal("unsupported guess", 0.2, 0.5) == "I don't know"
+
+
+def test_plain_evaluator_ignores_answerability_labels_without_gate_decisions() -> None:
+    row = {
+        "condition": "correct",
+        "pair_id": "probe",
+        "prediction": "47",
+        "em": 1.0,
+        "token_f1": 1.0,
+        "eos": True,
+        "generated_tokens": 1,
+        "unsupported_number_rate": 0.0,
+        "unsupported_entity_rate": 0.0,
+        "answerable": True,
+    }
+    assert "answerability" not in summarize([row])
 
 
 def test_pointer_empty_context_falls_back_to_vocabulary() -> None:

@@ -9,9 +9,13 @@ from pathlib import Path
 import torch
 
 from grounded_qa.metrics import exact_match, repeated_ngram_rate, token_f1, unsupported_entity_rate, unsupported_number_rate
-from grounded_qa.needle_pointer import NeedlePointerModel, NeedlePointerOutput
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput
 from grounded_qa.needle_tokenizer import EOS_ID, NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig, NeedleishModel, load_public_checkpoint
+
+
+def apply_refusal(prediction: str, probability: float, threshold: float) -> str:
+    return prediction if probability >= threshold else "I don't know"
 
 
 @torch.inference_mode()
@@ -21,8 +25,9 @@ def generate_batch(
     source_valid: torch.Tensor,
     max_new_tokens: int,
     context_mask: torch.Tensor | None = None,
+    memory: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    memory = model.encode(source_ids, source_valid)
+    memory = model.encode(source_ids, source_valid) if memory is None else memory
     decoder = torch.full((source_ids.shape[0], 1), EOS_ID, dtype=torch.long, device=source_ids.device)
     finished = torch.zeros(source_ids.shape[0], dtype=torch.bool, device=source_ids.device)
     for _ in range(max_new_tokens):
@@ -77,6 +82,19 @@ def summarize(rows: list[dict]) -> dict:
         "correct_vs_wrong_output_change_rate": sum(v["correct"] != v["wrong"] for v in comparisons) / max(len(comparisons), 1),
         "correct_vs_empty_output_change_rate": sum(v["correct"] != v["empty"] for v in comparisons) / max(len(comparisons), 1),
     }
+    if rows and all("answerable" in row and "refused" in row for row in rows):
+        tp = sum(not row["refused"] and row["answerable"] for row in rows)
+        tn = sum(row["refused"] and not row["answerable"] for row in rows)
+        fp = sum(not row["refused"] and not row["answerable"] for row in rows)
+        fn = sum(row["refused"] and row["answerable"] for row in rows)
+        summary["answerability"] = {
+            "answerability_f1": 2 * tp / max(2 * tp + fp + fn, 1),
+            "refusal_precision": tn / max(tn + fn, 1),
+            "refusal_recall": tn / max(tn + fp, 1),
+            "refusal_f1": 2 * tn / max(2 * tn + fp + fn, 1),
+            "false_refusal_rate": fn / max(tp + fn, 1),
+            "hallucinated_answer_rate": fp / max(tn + fp, 1),
+        }
     return summary
 
 
@@ -89,6 +107,8 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--pointer", action="store_true")
+    parser.add_argument("--answerability", action="store_true")
+    parser.add_argument("--answerability-threshold", type=float, default=0.5)
     args = parser.parse_args()
 
     input_bytes = args.input.read_bytes()
@@ -96,10 +116,11 @@ def main() -> None:
     tokenizer = NeedleTokenizer(args.tokenizer, append_markers=False)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-    model_class = NeedlePointerModel if args.pointer else NeedleishModel
+    pointer = args.pointer or args.answerability
+    model_class = NeedleAnswerablePointerModel if args.answerability else NeedlePointerModel if pointer else NeedleishModel
     model = model_class(NeedleConfig.public_checkpoint()).to(device=device, dtype=dtype)
     if args.checkpoint.suffix == ".safetensors":
-        if args.pointer:
+        if pointer:
             from safetensors.torch import load_file
 
             model.load_state_dict(load_file(str(args.checkpoint), device=str(device)))
@@ -124,15 +145,22 @@ def main() -> None:
             valid[index, : len(ids)] = True
             context_start = len(tokenizer.encode(batch[index]["question"])) + 1
             context_mask[index, context_start : len(ids)] = True
-        generated = generate_batch(model, source, valid, args.max_new_tokens, context_mask).cpu().tolist()
-        for row, ids in zip(batch, generated):
+        memory = model.encode(source, valid)
+        probabilities = (
+            model.classify_answerability(memory, valid, context_mask).sigmoid().cpu().tolist()
+            if isinstance(model, NeedleAnswerablePointerModel)
+            else [1.0] * len(batch)
+        )
+        generated = generate_batch(model, source, valid, args.max_new_tokens, context_mask, memory).cpu().tolist()
+        for row, ids, probability in zip(batch, generated, probabilities):
             eos = EOS_ID in ids
             if eos:
                 ids = ids[: ids.index(EOS_ID)]
-            prediction = tokenizer.decode(ids).strip()
+            raw_prediction = tokenizer.decode(ids).strip()
+            prediction = apply_refusal(raw_prediction, probability, args.answerability_threshold) if args.answerability else raw_prediction
             em = max(exact_match(prediction, answer) for answer in row["answers"])
             f1 = max(token_f1(prediction, answer) for answer in row["answers"])
-            results.append({
+            result = {
                 **row,
                 "prediction": prediction,
                 "generated_ids": ids,
@@ -142,13 +170,28 @@ def main() -> None:
                 "token_f1": f1,
                 "unsupported_number_rate": unsupported_number_rate(prediction, row["context"]),
                 "unsupported_entity_rate": unsupported_entity_rate(prediction, row["context"], row["question"]),
-            })
+            }
+            if args.answerability:
+                result.update({
+                    "raw_prediction": raw_prediction,
+                    "p_answerable": probability,
+                    "answerable": row.get("answerable", row["condition"] in {"correct", "counterfactual"}),
+                    "refused": probability < args.answerability_threshold,
+                })
+            results.append(result)
 
     report = {
         "checkpoint": str(args.checkpoint),
         "evaluation_set": {"path": str(args.input), "sha256": hashlib.sha256(input_bytes).hexdigest(), "rows": len(rows)},
         "model": NeedleConfig.public_checkpoint().to_dict(),
-        "decoding": {"method": "raw greedy", "pointer": args.pointer, "decoder_start_id": EOS_ID, "max_new_tokens": args.max_new_tokens},
+        "decoding": {
+            "method": "raw greedy with refusal gate" if args.answerability else "raw greedy",
+            "pointer": pointer,
+            "answerability": args.answerability,
+            "answerability_threshold": args.answerability_threshold if args.answerability else None,
+            "decoder_start_id": EOS_ID,
+            "max_new_tokens": args.max_new_tokens,
+        },
         "summary": summarize(results),
         "examples": results,
     }
