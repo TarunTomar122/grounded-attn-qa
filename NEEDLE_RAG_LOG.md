@@ -110,6 +110,21 @@ Conservative unsupported-answer filtering plus the 512-token target limit left
 399 usable rows (25.1%). This is a preliminary single-shard rate; the full
 extracted corpus audit will replace it.
 
+### N2 dataset audit
+
+Current pinned Hub revisions and observed sizes:
+
+| Dataset | Revision | Train | Validation | Intended role |
+|---|---|---:|---:|---|
+| SQuAD2 | `3ffb306f725f7d2ce8394bc1873b24868140c412` | 86,821 answerable + 43,498 unanswerable | 5,928 + 5,945 | N2 spans; N3 refusal |
+| CoQA | `0d9e9952f1ef6e5415492d3d84b5873259137e3c` | 108,647 turns, 1,376 unknown | 7,983 turns, 66 unknown | natural answers + rationale spans |
+| HotpotQA | `1908d6afbbead072334abe2965f91bd2709910ab` | 90,447 distractor examples | 7,405 | untouched external evaluation |
+
+The current Hugging Face Natural Questions export is marked partial and exposes
+only 10,639 training rows, far below the official corpus. It will not be treated
+as complete or mixed into N2 until the official simplified release is prepared
+and its span semantics are verified.
+
 ### Next measured gates
 
 1. Freeze N0 QA/context-dependence evaluation sets.

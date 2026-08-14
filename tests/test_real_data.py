@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from grounded_qa.data import encode_row
-from grounded_qa.real_data import squad2_rows_from_items
+from grounded_qa.real_data import coqa_rows, squad2_rows_from_items
 from grounded_qa.tokenizer import load_tokenizer
 
 
@@ -65,6 +65,25 @@ class RealDataTests(unittest.TestCase):
         self.assertEqual(rows, [])
         self.assertEqual(stats["unanswerable"], 1)
         self.assertEqual(stats["invalid_span"], 1)
+
+    def test_coqa_huggingface_schema_preserves_rationale_and_unknown(self) -> None:
+        from unittest.mock import patch
+
+        item = {
+            "id": "conversation",
+            "story": "Alpha was born in Smiljan.",
+            "questions": ["Where?", "Who signed it?"],
+            "answers": {
+                "input_text": ["Smiljan", "unknown"],
+                "answer_start": [18, -1],
+                "answer_end": [25, -1],
+            },
+        }
+        with patch("datasets.load_dataset", return_value=[item]):
+            rows = coqa_rows()
+        self.assertEqual(rows[0]["evidence"], "Smiljan")
+        self.assertTrue(rows[0]["answerable"])
+        self.assertFalse(rows[1]["answerable"])
 
 
 if __name__ == "__main__":

@@ -350,16 +350,21 @@ def coqa_rows(split: str = "train", max_n: int | None = None) -> list[dict[str, 
     for item in dataset:
         story = item.get("story", "")
         questions = item.get("questions", [])
-        answers = item.get("answers", [])
+        answers = item.get("answers", {})
+        texts = answers.get("input_text", [])
+        starts = answers.get("answer_start", [])
+        ends = answers.get("answer_end", [])
         history: list[str] = []
         for index, question in enumerate(questions):
-            answer_item = answers[index] if index < len(answers) else {}
-            answer = answer_item.get("input_text", "").strip()
-            if not answer:
+            original_answer = texts[index].strip() if index < len(texts) else ""
+            if not original_answer:
                 continue
+            answer = "" if original_answer.lower() == "unknown" else original_answer
+            start = starts[index] if index < len(starts) else -1
+            end = ends[index] if index < len(ends) else -1
+            evidence = story[start:end] if 0 <= start < end <= len(story) else ""
             useful_history = " ".join(history[-4:])
             current = f"Previous turns: {useful_history} Current question: {question}" if useful_history else question
-            evidence = answer_item.get("span_text", answer)
             rows.append(
                 _row(
                     row_id=f"coqa-{item.get('id', len(rows))}-{index}",
@@ -369,10 +374,10 @@ def coqa_rows(split: str = "train", max_n: int | None = None) -> list[dict[str, 
                     evidence=evidence,
                     source="coqa",
                     hardness="medium",
-                    metadata={"conversation_id": item.get("id", "")},
+                    metadata={"conversation_id": item.get("id", ""), "answer_start": start, "answer_end": end, "original_answer": original_answer},
                 )
             )
-            history.extend((f"Q: {question}", f"A: {answer}"))
+            history.extend((f"Q: {question}", f"A: {original_answer}"))
             if max_n is not None and len(rows) >= max_n:
                 return rows
     return rows
