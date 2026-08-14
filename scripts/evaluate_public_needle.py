@@ -80,7 +80,10 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
     model = NeedleishModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=dtype)
-    load_public_checkpoint(model, args.checkpoint)
+    if args.checkpoint.suffix == ".safetensors":
+        load_public_checkpoint(model, args.checkpoint)
+    else:
+        model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
     model.eval()
 
     results = []
