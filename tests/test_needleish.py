@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 
+from grounded_qa.needle_pointer import NeedlePointerModel, NeedlePointerOutput, pointer_loss
 from grounded_qa.needle_tokenizer import SPECIAL_TOKENS
 from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, NeedleishModel
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
@@ -42,6 +43,44 @@ def test_public_checkpoint_configuration_is_exact() -> None:
     assert cfg.dropout == 0.1
     assert not cfg.cross_attention_rope
     assert model.n_params() == 26_233_372
+
+
+def test_needle_pointer_masks_query_and_normalizes_final_distribution() -> None:
+    cfg = tiny_config()
+    model = NeedlePointerModel(cfg)
+    source = torch.tensor([[7, 8, 9, 10]])
+    source_valid = torch.ones_like(source, dtype=torch.bool)
+    context_mask = torch.tensor([[False, False, True, True]])
+    decoder = torch.tensor([[1, 9]])
+    output = model(source, source_valid, context_mask, decoder, torch.ones_like(decoder, dtype=torch.bool))
+
+    assert torch.equal(output.copy_position_probs[..., :2], torch.zeros_like(output.copy_position_probs[..., :2]))
+    torch.testing.assert_close(output.final_distribution(source).sum(dim=-1), torch.ones(1, 2))
+
+
+def test_needle_pointer_position_loss_selects_the_annotated_duplicate() -> None:
+    source = torch.tensor([[7, 8, 9, 9]])
+    output = NeedlePointerOutput(
+        vocab_logits=torch.zeros(1, 1, tiny_config().vocab_size),
+        copy_position_probs=torch.tensor([[[0.0, 0.0, 0.1, 0.9]]]),
+        p_gen=torch.full((1, 1), 0.5),
+    )
+    annotated = pointer_loss(
+        output,
+        source,
+        torch.tensor([[9]]),
+        torch.ones((1, 1), dtype=torch.bool),
+        torch.tensor([[3]]),
+    )
+    duplicate = pointer_loss(
+        output,
+        source,
+        torch.tensor([[9]]),
+        torch.ones((1, 1), dtype=torch.bool),
+        torch.tensor([[2]]),
+    )
+
+    assert annotated.pointer_position < duplicate.pointer_position
 
 
 def test_synth_rag_evidence_context_keeps_cited_source() -> None:

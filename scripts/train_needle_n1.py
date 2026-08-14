@@ -58,7 +58,11 @@ class Muon(torch.optim.Optimizer):
 def optimizers_for(model: nn.Module, adam_lr: float, muon_lr: float) -> dict[str, torch.optim.Optimizer]:
     if not muon_lr:
         return {"adam": torch.optim.AdamW(model.parameters(), lr=adam_lr, betas=(0.9, 0.95), weight_decay=0.0)}
-    dense_ids = {id(module.weight) for module in model.modules() if isinstance(module, nn.Linear)}
+    dense_ids = {
+        id(module.weight)
+        for module in model.modules()
+        if isinstance(module, nn.Linear) and min(module.weight.shape) > 1
+    }
     dense = [parameter for parameter in model.parameters() if id(parameter) in dense_ids]
     other = [parameter for parameter in model.parameters() if id(parameter) not in dense_ids]
     return {

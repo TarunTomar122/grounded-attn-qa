@@ -29,6 +29,17 @@ def test_muon_updates_only_dense_weights() -> None:
     assert isinstance(optimizers["muon"], Muon)
 
 
+def test_muon_leaves_scalar_gate_with_adam() -> None:
+    model = torch.nn.Sequential(
+        torch.nn.Linear(4, 4, bias=False),
+        torch.nn.Linear(4, 1),
+    )
+    optimizers = optimizers_for(model, adam_lr=3.0e-5, muon_lr=0.02)
+    gate = model[1]
+    assert all(parameter is not gate.weight for parameter in optimizers["muon"].param_groups[0]["params"])
+    assert any(parameter is gate.weight for parameter in optimizers["adam"].param_groups[0]["params"])
+
+
 def test_adapted_checkpoint_can_initialize_the_next_stage(tmp_path) -> None:
     source = torch.nn.Linear(3, 2, bias=False)
     checkpoint = tmp_path / "adapted.pt"
