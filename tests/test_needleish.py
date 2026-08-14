@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import pytest
 
 from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput, pointer_loss
 from grounded_qa.needle_tokenizer import SPECIAL_TOKENS
@@ -203,6 +204,7 @@ def test_answerability_head_receives_gradient_without_copy_targets() -> None:
     assert output.answerability_logits is not None
     torch.nn.functional.binary_cross_entropy_with_logits(output.answerability_logits, torch.zeros(1)).backward()
     assert model.answerability.weight.grad is not None
+    assert model.pointer.gate.weight.grad is None
 
 
 def test_wrong_context_swap_preserves_questions() -> None:
@@ -215,3 +217,5 @@ def test_wrong_context_swap_preserves_questions() -> None:
     assert wrong[0][wrong_context[0]].tolist() == [30, 31]
     assert wrong[1][wrong_context[1]].tolist() == [20, 21]
     assert torch.equal(wrong.ne(0), wrong_valid)
+    with pytest.raises(ValueError, match="at least two"):
+        swap_contexts(source[:1], valid[:1], context[:1])

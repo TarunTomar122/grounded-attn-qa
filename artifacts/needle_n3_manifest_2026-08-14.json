@@ -1,0 +1,32 @@
+{
+  "n2_manifest_sha256": "d0c2d7d432a3b2973561ca26ede18cc092de16e500249c1872955e965e6e69d7",
+  "negative_dataset": {
+    "name": "rajpurkar/squad_v2",
+    "revision": "3ffb306f725f7d2ce8394bc1873b24868140c412"
+  },
+  "purpose": "N3 supervised answerability: preserve all N2 positives and add every usable official SQuAD2 negative once.",
+  "splits": {
+    "train": {
+      "answerable_rows": 189335,
+      "dropped_unanswerable_rows": 0,
+      "file": {
+        "bytes": 959509329,
+        "path": "n3-train.pt",
+        "sha256": "82874a842c92e91ad6a05dc4c018f6ee04baa637181b407cb979bedd6c249e7c"
+      },
+      "total_rows": 232833,
+      "unanswerable_rows": 43498
+    },
+    "validation": {
+      "answerable_rows": 13607,
+      "dropped_unanswerable_rows": 0,
+      "file": {
+        "bytes": 80578411,
+        "path": "n3-validation.pt",
+        "sha256": "e919f39544ba5297343b6499854b9f2d86d61140214a8cda048662d4a428a2a8"
+      },
+      "total_rows": 19552,
+      "unanswerable_rows": 5945
+    }
+  }
+}

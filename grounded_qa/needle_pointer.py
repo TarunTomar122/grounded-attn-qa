@@ -104,14 +104,23 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
             context_mask,
             target_valid,
         )
-        question_mask = source_valid & ~context_mask
-        pooled = (memory * question_mask[..., None]).sum(dim=1) / question_mask.sum(dim=1, keepdim=True).clamp_min(1)
+        answerability_logits = self.classify_answerability(memory, source_valid, context_mask)
         return NeedlePointerOutput(
             output.vocab_logits,
             output.copy_position_probs,
             output.p_gen,
-            self.answerability(pooled).squeeze(-1),
+            answerability_logits,
         )
+
+    def classify_answerability(
+        self,
+        memory: torch.Tensor,
+        source_valid: torch.Tensor,
+        context_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        question_mask = source_valid & ~context_mask
+        pooled = (memory * question_mask[..., None]).sum(dim=1) / question_mask.sum(dim=1, keepdim=True).clamp_min(1)
+        return self.answerability(pooled).squeeze(-1)
 
 
 @dataclass
