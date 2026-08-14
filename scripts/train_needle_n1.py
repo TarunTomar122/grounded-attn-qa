@@ -243,6 +243,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--wandb", action="store_true")
+    parser.add_argument("--run-name")
     parser.add_argument("--resume", type=Path)
     args = parser.parse_args()
 
@@ -285,7 +286,8 @@ def main() -> None:
     if args.wandb:
         import wandb
         config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
-        run = wandb.init(project="grounded-attn-qa", group="needle-rag", name=f"needle26m-n1-adam{args.lr:g}-muon{args.muon_lr:g}-first{args.first_token_weight:g}-eos{args.eos_token_weight:g}", config={**config, "train_rows": len(train["source_ids"]), "validation_rows": len(validation["source_ids"]), "total_steps": total_steps})
+        default_name = f"needle26m-n1-adam{args.lr:g}-muon{args.muon_lr:g}-first{args.first_token_weight:g}-eos{args.eos_token_weight:g}"
+        run = wandb.init(project="grounded-attn-qa", group="needle-rag", name=args.run_name or default_name, config={**config, "train_rows": len(train["source_ids"]), "validation_rows": len(validation["source_ids"]), "total_steps": total_steps})
 
     initial = evaluate(model, validation, device, args.batch_size, args.z_loss, args.first_token_weight, args.eos_token_weight)
     probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device)
