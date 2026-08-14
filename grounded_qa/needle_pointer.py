@@ -14,6 +14,7 @@ class NeedlePointerOutput:
     vocab_logits: torch.Tensor
     copy_position_probs: torch.Tensor
     p_gen: torch.Tensor
+    answerability_logits: torch.Tensor | None = None
 
     def final_distribution(self, source_ids: torch.Tensor) -> torch.Tensor:
         copy = PointerGenerator.copy_distribution(
@@ -73,8 +74,44 @@ class NeedlePointerModel(NeedleishModel):
 
     def load_backbone_state_dict(self, state: dict[str, torch.Tensor]) -> None:
         missing, unexpected = self.load_state_dict(state, strict=False)
-        if unexpected or any(not name.startswith("pointer.") for name in missing):
+        if unexpected or any(not name.startswith(("pointer.", "answerability.")) for name in missing):
             raise ValueError(f"Backbone checkpoint mismatch: missing={missing}, unexpected={unexpected}")
+
+
+class NeedleAnswerablePointerModel(NeedlePointerModel):
+    """Pointer-generator with a separate evidence-sufficiency classifier."""
+
+    def __init__(self, cfg: NeedleConfig):
+        super().__init__(cfg)
+        self.answerability = nn.Linear(cfg.d_model, 1)
+        self.answerability.apply(self._init)
+        nn.init.zeros_(self.answerability.bias)
+
+    def forward(
+        self,
+        source_ids: torch.Tensor,
+        source_valid: torch.Tensor,
+        context_mask: torch.Tensor,
+        decoder_input_ids: torch.Tensor,
+        target_valid: torch.Tensor,
+    ) -> NeedlePointerOutput:
+        memory = self.encode(source_ids, source_valid)
+        output = self.decode_pointer(
+            decoder_input_ids,
+            memory,
+            source_ids,
+            source_valid,
+            context_mask,
+            target_valid,
+        )
+        question_mask = source_valid & ~context_mask
+        pooled = (memory * question_mask[..., None]).sum(dim=1) / question_mask.sum(dim=1, keepdim=True).clamp_min(1)
+        return NeedlePointerOutput(
+            output.vocab_logits,
+            output.copy_position_probs,
+            output.p_gen,
+            self.answerability(pooled).squeeze(-1),
+        )
 
 
 @dataclass
@@ -111,7 +148,8 @@ def pointer_loss(
     weights = 1 + first * (first_token_weight - 1) + target_ids.eq(eos_id) * (eos_token_weight - 1)
     weights = weights * target_valid
     sequence = (per_token * weights).sum() / weights.sum().clamp_min(1)
-    z = logits[target_valid].logsumexp(dim=-1).square().mean()
+    selected_logits = logits[target_valid]
+    z = selected_logits.logsumexp(dim=-1).square().mean() if selected_logits.numel() else logits.sum() * 0
 
     supervised = target_valid & gold_copy_positions.ge(0)
     safe_positions = gold_copy_positions.clamp_min(0)

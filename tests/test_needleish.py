@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import torch
 
-from grounded_qa.needle_pointer import NeedlePointerModel, NeedlePointerOutput, pointer_loss
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput, pointer_loss
 from grounded_qa.needle_tokenizer import SPECIAL_TOKENS
 from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, NeedleishModel
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
 from grounded_qa.synth_data import encode_synth_row, source_bucket, split_for_source
 from scripts.evaluate_public_needle import generate_batch
+from scripts.train_needle_n2_pointer import swap_contexts
 
 
 def tiny_config() -> NeedleConfig:
@@ -190,3 +191,27 @@ def test_pointer_empty_context_falls_back_to_vocabulary() -> None:
     assert torch.equal(output.copy_position_probs, torch.zeros_like(output.copy_position_probs))
     assert torch.equal(output.p_gen, torch.ones_like(output.p_gen))
     torch.testing.assert_close(output.final_distribution(source).sum(dim=-1), torch.ones(1, 1))
+
+
+def test_answerability_head_receives_gradient_without_copy_targets() -> None:
+    model = NeedleAnswerablePointerModel(tiny_config())
+    source = torch.tensor([[4, 5, 6]])
+    valid = torch.ones_like(source, dtype=torch.bool)
+    context = torch.tensor([[False, True, True]])
+    decoder = torch.tensor([[1]])
+    output = model(source, valid, context, decoder, torch.ones_like(decoder, dtype=torch.bool))
+    assert output.answerability_logits is not None
+    torch.nn.functional.binary_cross_entropy_with_logits(output.answerability_logits, torch.zeros(1)).backward()
+    assert model.answerability.weight.grad is not None
+
+
+def test_wrong_context_swap_preserves_questions() -> None:
+    source = torch.tensor([[10, 5, 20, 21, 0], [11, 12, 5, 30, 31]])
+    valid = source.ne(0)
+    context = torch.tensor([[False, False, True, True, False], [False, False, False, True, True]])
+    wrong, wrong_valid, wrong_context = swap_contexts(source, valid, context)
+    assert wrong[0, :2].tolist() == [10, 5]
+    assert wrong[1, :3].tolist() == [11, 12, 5]
+    assert wrong[0][wrong_context[0]].tolist() == [30, 31]
+    assert wrong[1][wrong_context[1]].tolist() == [20, 21]
+    assert torch.equal(wrong.ne(0), wrong_valid)

@@ -8,9 +8,10 @@ import time
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 
 from grounded_qa.metrics import exact_match, token_f1
-from grounded_qa.needle_pointer import NeedlePointerModel, pointer_loss
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, pointer_loss
 from grounded_qa.needle_tokenizer import EOS_ID, NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig
 from scripts.train_needle_n1 import load_split, lr_at, optimizers_for
@@ -30,10 +31,35 @@ def batch(data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.de
     decoder = torch.zeros_like(target)
     decoder[:, 0] = EOS_ID
     decoder[:, 1:] = target[:, :-1]
-    return source, source_valid, context_mask, decoder, target, target_valid, gold
+    labels = data.get("answerable")
+    answerable = torch.ones(len(indices), dtype=torch.bool, device=device) if labels is None else labels[indices].to(device, non_blocking=True)
+    return source, source_valid, context_mask, decoder, target, target_valid, gold, answerable
 
 
-def load_start(model: NeedlePointerModel, path: Path, device: torch.device) -> None:
+def swap_contexts(
+    source: torch.Tensor,
+    source_valid: torch.Tensor,
+    context_mask: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Keep each question fixed and replace only its context with the next row's."""
+    wrong_source = source.clone()
+    wrong_valid = source_valid.clone()
+    wrong_context = context_mask.clone()
+    donor = source.roll(1, 0)
+    donor_context = context_mask.roll(1, 0)
+    for row in range(len(source)):
+        start = int(context_mask[row].nonzero()[0])
+        tokens = donor[row][donor_context[row]][: source.shape[1] - start]
+        wrong_source[row, start:] = 0
+        wrong_source[row, start : start + len(tokens)] = tokens
+        wrong_valid[row, start:] = False
+        wrong_valid[row, start : start + len(tokens)] = True
+        wrong_context[row, start:] = False
+        wrong_context[row, start : start + len(tokens)] = True
+    return wrong_source, wrong_valid, wrong_context
+
+
+def load_start(model: NeedlePointerModel | NeedleAnswerablePointerModel, path: Path, device: torch.device) -> None:
     if path.suffix == ".safetensors":
         from safetensors.torch import load_file
 
@@ -46,28 +72,30 @@ def load_start(model: NeedlePointerModel, path: Path, device: torch.device) -> N
 @torch.inference_mode()
 def evaluate(model, data, device, args) -> dict[str, float]:
     model.eval()
-    totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "gold_pointer_probability", "p_gen", "wrong_sequence")}
+    totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "gold_pointer_probability", "p_gen", "wrong_sequence", "answerability_bce", "tp", "tn", "fp", "fn", "positive_probability", "negative_probability", "wrong_probability")}
     for start in range(0, len(data["source_ids"]), args.batch_size):
         indices = torch.arange(start, min(start + args.batch_size, len(data["source_ids"])))
-        source, source_valid, context_mask, decoder, target, valid, gold = batch(data, indices, device)
+        source, source_valid, context_mask, decoder, target, valid, gold, answerable = batch(data, indices, device)
         output = model(source, source_valid, context_mask, decoder, valid)
+        loss_valid = valid & answerable[:, None] if args.answerability_weight else valid
         loss = pointer_loss(
             output,
             source,
             target,
-            valid,
+            loss_valid,
             gold,
             z_weight=args.z_loss,
             pointer_weight=args.pointer_weight,
             first_token_weight=args.first_token_weight,
             eos_token_weight=args.eos_token_weight,
         )
-        wrong = model(source.roll(1, 0), source_valid.roll(1, 0), context_mask.roll(1, 0), decoder, valid)
+        wrong_source, wrong_valid, wrong_context = swap_contexts(source, source_valid, context_mask)
+        wrong = model(wrong_source, wrong_valid, wrong_context, decoder, valid)
         wrong_loss = pointer_loss(
             wrong,
-            source.roll(1, 0),
+            wrong_source,
             target,
-            valid,
+            loss_valid,
             gold,
             z_weight=0.0,
             pointer_weight=0.0,
@@ -75,9 +103,9 @@ def evaluate(model, data, device, args) -> dict[str, float]:
             eos_token_weight=args.eos_token_weight,
         )
         rows = len(indices)
-        tokens = int(valid.sum())
-        copy_tokens = int((valid & gold.ge(0)).sum())
-        weighted = float((valid * (1 + torch.arange(target.shape[1], device=device).eq(0)[None] * (args.first_token_weight - 1) + target.eq(EOS_ID) * (args.eos_token_weight - 1))).sum())
+        tokens = int(loss_valid.sum())
+        copy_tokens = int((loss_valid & gold.ge(0)).sum())
+        weighted = float((loss_valid * (1 + torch.arange(target.shape[1], device=device).eq(0)[None] * (args.first_token_weight - 1) + target.eq(EOS_ID) * (args.eos_token_weight - 1))).sum())
         totals["rows"] += rows
         totals["tokens"] += tokens
         totals["weighted"] += weighted
@@ -89,12 +117,24 @@ def evaluate(model, data, device, args) -> dict[str, float]:
         totals["gold_pointer_probability"] += float(loss.mean_gold_pointer_probability) * copy_tokens
         totals["p_gen"] += float(loss.mean_p_gen) * tokens
         totals["wrong_sequence"] += float(wrong_loss.sequence) * weighted
+        if output.answerability_logits is not None:
+            probability = output.answerability_logits.sigmoid()
+            predicted = probability >= 0.5
+            totals["answerability_bce"] += float(F.binary_cross_entropy_with_logits(output.answerability_logits, answerable.float(), reduction="sum"))
+            totals["tp"] += int((predicted & answerable).sum())
+            totals["tn"] += int((~predicted & ~answerable).sum())
+            totals["fp"] += int((predicted & ~answerable).sum())
+            totals["fn"] += int((~predicted & answerable).sum())
+            totals["positive_probability"] += float((probability * answerable).sum())
+            totals["negative_probability"] += float((probability * ~answerable).sum())
+            if wrong.answerability_logits is not None:
+                totals["wrong_probability"] += float(wrong.answerability_logits.sigmoid().sum())
     model.train()
     sequence = totals["sequence"] / max(totals["weighted"], 1)
     z = totals["z"] / max(totals["tokens"], 1)
     wrong = totals["wrong_sequence"] / max(totals["weighted"], 1)
     pointer = totals["pointer"] / max(totals["copy_tokens"], 1)
-    return {
+    metrics = {
         "val/loss": sequence + args.z_loss * z + args.pointer_weight * pointer,
         "val/sequence_nll": sequence,
         "val/z": z,
@@ -105,13 +145,33 @@ def evaluate(model, data, device, args) -> dict[str, float]:
         "val/wrong_context_sequence_nll": wrong,
         "val/context_dependency_gap": wrong - sequence,
     }
+    if args.answerability_weight:
+        positives = totals["tp"] + totals["fn"]
+        negatives = totals["tn"] + totals["fp"]
+        precision = totals["tp"] / max(totals["tp"] + totals["fp"], 1)
+        recall = totals["tp"] / max(positives, 1)
+        metrics.update({
+            "val/loss": metrics["val/loss"] + args.answerability_weight * totals["answerability_bce"] / totals["rows"],
+            "val/answerability_bce": totals["answerability_bce"] / totals["rows"],
+            "val/answerability_accuracy": (totals["tp"] + totals["tn"]) / totals["rows"],
+            "val/answerability_precision": precision,
+            "val/answerability_recall": recall,
+            "val/answerability_f1": 2 * precision * recall / max(precision + recall, 1e-8),
+            "val/false_refusal_rate": totals["fn"] / max(positives, 1),
+            "val/refusal_recall": totals["tn"] / max(negatives, 1),
+            "val/hallucinated_answer_rate": totals["fp"] / max(negatives, 1),
+            "val/mean_answerable_probability": totals["positive_probability"] / max(positives, 1),
+            "val/mean_unanswerable_probability": totals["negative_probability"] / max(negatives, 1),
+            "val/wrong_context_answerable_probability": totals["wrong_probability"] / totals["rows"],
+        })
+    return metrics
 
 
 @torch.inference_mode()
 def probe(model: NeedlePointerModel, tokenizer: NeedleTokenizer, data, device, count: int = 8) -> tuple[dict[str, float], list[dict]]:
     model.eval()
     indices = torch.arange(min(count, len(data["source_ids"])))
-    source, source_valid, context_mask, _, target, _, _ = batch(data, indices, device)
+    source, source_valid, context_mask, _, target, _, _, _ = batch(data, indices, device)
     memory = model.encode(source, source_valid)
     decoder = torch.full((len(indices), 1), EOS_ID, dtype=torch.long, device=device)
     finished = torch.zeros(len(indices), dtype=torch.bool, device=device)
@@ -180,6 +240,7 @@ def main() -> None:
     parser.add_argument("--run-name", default="needle26m-n2-pg")
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--evaluate-only", action="store_true")
+    parser.add_argument("--answerability-weight", type=float, default=0.0)
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -188,7 +249,8 @@ def main() -> None:
     torch.set_float32_matmul_precision("high")
     device = torch.device("cuda")
     train, validation = load_split(args.data_dir, "train"), load_split(args.data_dir, "validation")
-    eager = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=torch.bfloat16)
+    model_class = NeedleAnswerablePointerModel if args.answerability_weight else NeedlePointerModel
+    eager = model_class(NeedleConfig.public_checkpoint()).to(device=device, dtype=torch.bfloat16)
     load_start(eager, args.checkpoint, device)
     if args.evaluate_only:
         metrics = evaluate(eager, validation, device, args)
@@ -227,7 +289,7 @@ def main() -> None:
     order = torch.randperm(len(train["source_ids"]), generator=torch.Generator().manual_seed(args.seed))
     for start in range(step * args.batch_size, total_steps * args.batch_size, args.batch_size):
         indices = order[start : start + args.batch_size]
-        source, source_valid, context_mask, decoder, target, valid, gold = batch(train, indices, device)
+        source, source_valid, context_mask, decoder, target, valid, gold, answerable = batch(train, indices, device)
         adam_lr, muon_lr = lr_at(step, total_steps, args.lr), lr_at(step, total_steps, args.muon_lr)
         for group in optimizers["adam"].param_groups:
             group["lr"] = adam_lr
@@ -236,8 +298,11 @@ def main() -> None:
         for optimizer in optimizers.values():
             optimizer.zero_grad(set_to_none=True)
         output = model(source, source_valid, context_mask, decoder, valid)
-        loss = pointer_loss(output, source, target, valid, gold, z_weight=args.z_loss, pointer_weight=args.pointer_weight, first_token_weight=args.first_token_weight, eos_token_weight=args.eos_token_weight)
-        loss.total.backward()
+        loss_valid = valid & answerable[:, None] if args.answerability_weight else valid
+        loss = pointer_loss(output, source, target, loss_valid, gold, z_weight=args.z_loss, pointer_weight=args.pointer_weight, first_token_weight=args.first_token_weight, eos_token_weight=args.eos_token_weight)
+        answerability_loss = F.binary_cross_entropy_with_logits(output.answerability_logits, answerable.float()) if output.answerability_logits is not None else loss.total.new_zeros(())
+        total_loss = loss.total + args.answerability_weight * answerability_loss
+        total_loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         for optimizer in optimizers.values():
             optimizer.step()
@@ -246,12 +311,14 @@ def main() -> None:
         if step == 1 or step % 50 == 0:
             now = time.perf_counter()
             metrics = {
-                "train/loss": float(loss.total.detach()),
+                "train/loss": float(total_loss.detach()),
                 "train/sequence_nll": float(loss.sequence.detach()),
                 "train/pointer_position_nll": float(loss.pointer_position.detach()),
                 "train/pointer_position_accuracy": float(loss.pointer_accuracy.detach()),
                 "train/mean_gold_pointer_probability": float(loss.mean_gold_pointer_probability.detach()),
                 "train/mean_p_gen": float(loss.mean_p_gen.detach()),
+                "train/answerability_bce": float(answerability_loss.detach()),
+                "train/answerability_accuracy": float((output.answerability_logits.ge(0) == answerable).float().mean()) if output.answerability_logits is not None else 0.0,
                 "train/grad_norm": float(grad_norm),
                 "train/adam_lr": adam_lr,
                 "train/muon_lr": muon_lr,
