@@ -1,0 +1,532 @@
+{
+  "stage": "N1 SYNTH RAG continued training",
+  "status": "completed",
+  "starting_checkpoint": {
+    "repository": "Cactus-Compute/needle",
+    "revision": "5f89b4307696d669c3df1d38ae057e6e1728b107"
+  },
+  "git_commit": "25c8002aa34657b63f1c5b4f45bf4ad99497ba6a",
+  "data": {
+    "repository": "PleIAs/SYNTH",
+    "revision": "0d6813a2966662c39f22f0b9af28a0c1c9f7a437",
+    "filter": "exercise = 'rag' AND language = 'en'",
+    "stats": {
+      "dropped_empty_answer": 141,
+      "dropped_evidence": 398894,
+      "dropped_target_length": 5588,
+      "dropped_unsupported": 174007,
+      "input_rows": 796582,
+      "train_rows": 215870,
+      "train_source_tokens": 166075631,
+      "train_target_tokens": 45512094,
+      "validation_rows": 2082,
+      "validation_source_tokens": 1616954,
+      "validation_target_tokens": 435400
+    },
+    "actual_tokens_seen": 211574241,
+    "tensor_files": [
+      {
+        "path": "part-0-train.pt",
+        "split": "train",
+        "rows": 54076,
+        "bytes": 166340111,
+        "sha256": "8f134bc884e1a33f56bdabe2b030e6f707a06888d63e761c8df05fcd9ce518be"
+      },
+      {
+        "path": "part-0-validation.pt",
+        "split": "validation",
+        "rows": 510,
+        "bytes": 1571265,
+        "sha256": "96078f67d6c09ed0b816e8d55d86193785122ad4407a69cb7d18e230852d4a57"
+      },
+      {
+        "path": "part-125-train.pt",
+        "split": "train",
+        "rows": 54128,
+        "bytes": 166500131,
+        "sha256": "1a03d72396c49f095594ecf980097ce502c866e25a1dc793360c5d7fbdd6c448"
+      },
+      {
+        "path": "part-125-validation.pt",
+        "split": "validation",
+        "rows": 537,
+        "bytes": 1654229,
+        "sha256": "0a61601a195c7ef95cb9909bab784e691681b8635dc9b966f797da571ce4fb2a"
+      },
+      {
+        "path": "part-250-train.pt",
+        "split": "train",
+        "rows": 53708,
+        "bytes": 165208227,
+        "sha256": "0e170017b60c59a49553563b8fad802740248bc516b6e5f323dff47ec2608377"
+      },
+      {
+        "path": "part-250-validation.pt",
+        "split": "validation",
+        "rows": 495,
+        "bytes": 1525077,
+        "sha256": "318d27d03e368d75ba134de048eb6ba29d3614972c02795e4eee9416ab87080b"
+      },
+      {
+        "path": "part-375-train.pt",
+        "split": "train",
+        "rows": 53958,
+        "bytes": 165977251,
+        "sha256": "e6bdfa96c1d66e84741c7aec6915154c52ba8e8151ec8def6681ba7a47f7a7f5"
+      },
+      {
+        "path": "part-375-validation.pt",
+        "split": "validation",
+        "rows": 540,
+        "bytes": 1663573,
+        "sha256": "a4b4bd14b365414eebc1552c6faeecbc19b68ece7effa3ebbbb43d52877b2443"
+      }
+    ]
+  },
+  "training": {
+    "steps": 8994,
+    "epochs": 1,
+    "batch_size": 24,
+    "dtype": "BF16",
+    "optimizer": {
+      "dense": "Muon",
+      "muon_lr": 0.02,
+      "other": "AdamW",
+      "adam_lr": 3e-05
+    },
+    "loss": {
+      "autoregressive_ce": true,
+      "z_loss": 0.0001,
+      "first_token_weight": 100.0,
+      "eos_token_weight": 20.0
+    },
+    "schedule": {
+      "warmup_fraction": 0.05,
+      "decay_fraction": 0.15,
+      "final_lr_fraction": 0.05
+    },
+    "compiled": true,
+    "steady_actual_tokens_per_second": 193000,
+    "peak_allocated_vram_gb": 6.534094336,
+    "wandb_run_id": "6qg5u5xy",
+    "wandb_url": "https://wandb.ai/tomartarun2001-adobe/grounded-attn-qa/runs/6qg5u5xy"
+  },
+  "validation_curve": [
+    {
+      "step": 0,
+      "val/loss": 8.002931103130297,
+      "val/ce": 8.002552230016086,
+      "val/token_accuracy": 0.10686724849370405,
+      "val/first_token_accuracy": 0.0,
+      "val/eos_accuracy": 0.0009606148220963712,
+      "val/wrong_context_ce": 9.066545439590945,
+      "val/context_dependency_gap": 1.0639932095748588,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.0,
+      "probe/eos_rate": 0.75,
+      "probe/mean_tokens": 129.5
+    },
+    {
+      "step": 500,
+      "val/loss": 2.345124969061927,
+      "val/ce": 2.3429956675839176,
+      "val/token_accuracy": 0.545574184337038,
+      "val/first_token_accuracy": 0.4519692706615162,
+      "val/eos_accuracy": 0.9884726320975795,
+      "val/wrong_context_ce": 4.447441456029367,
+      "val/context_dependency_gap": 2.104445788445449,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.28995532156451675,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 53.875
+    },
+    {
+      "step": 1000,
+      "val/loss": 2.076952319506691,
+      "val/ce": 2.07542178336343,
+      "val/token_accuracy": 0.580691320275324,
+      "val/first_token_accuracy": 0.4807877185021766,
+      "val/eos_accuracy": 0.9836695611648669,
+      "val/wrong_context_ce": 4.195915801912396,
+      "val/context_dependency_gap": 2.1204940185489662,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.3116770549128508,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 72.875
+    },
+    {
+      "step": 1500,
+      "val/loss": 1.9962876371762144,
+      "val/ce": 1.9950685436979594,
+      "val/token_accuracy": 0.5935645373587932,
+      "val/first_token_accuracy": 0.48270894711574147,
+      "val/eos_accuracy": 0.9879923249871312,
+      "val/wrong_context_ce": 4.2659350115614005,
+      "val/context_dependency_gap": 2.270866467863441,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.3065993496785416,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 61.125
+    },
+    {
+      "step": 2000,
+      "val/loss": 1.9134633671088765,
+      "val/ce": 1.9123396820126477,
+      "val/token_accuracy": 0.6021290763291296,
+      "val/first_token_accuracy": 0.5009606282202586,
+      "val/eos_accuracy": 0.9923150881223102,
+      "val/wrong_context_ce": 4.122667075196266,
+      "val/context_dependency_gap": 2.2103273931836185,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.3143121540403793,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 69.75
+    },
+    {
+      "step": 2500,
+      "val/loss": 1.8838960665203748,
+      "val/ce": 1.8828744494685858,
+      "val/token_accuracy": 0.6076573270410094,
+      "val/first_token_accuracy": 0.5038424752631173,
+      "val/eos_accuracy": 0.996157544318812,
+      "val/wrong_context_ce": 4.077686129490003,
+      "val/context_dependency_gap": 2.1948116800214166,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.3118716424017721,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 63.25
+    },
+    {
+      "step": 3000,
+      "val/loss": 1.8571209238569606,
+      "val/ce": 1.8560795543371214,
+      "val/token_accuracy": 0.6130845214725635,
+      "val/first_token_accuracy": 0.5000000150299897,
+      "val/eos_accuracy": 0.987031711109777,
+      "val/wrong_context_ce": 4.1089051683778335,
+      "val/context_dependency_gap": 2.252825614040712,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.32014483189157295,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 86.625
+    },
+    {
+      "step": 3500,
+      "val/loss": 1.8557533498342516,
+      "val/ce": 1.8546221397050893,
+      "val/token_accuracy": 0.6169981647252379,
+      "val/first_token_accuracy": 0.5024015515269739,
+      "val/eos_accuracy": 0.9658981927533659,
+      "val/wrong_context_ce": 4.193725679208972,
+      "val/context_dependency_gap": 2.339103539503883,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.3771206645016351,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 111.125
+    },
+    {
+      "step": 4000,
+      "val/loss": 1.8141948477221619,
+      "val/ce": 1.813272138824562,
+      "val/token_accuracy": 0.6187253101143368,
+      "val/first_token_accuracy": 0.5244956915763338,
+      "val/eos_accuracy": 0.9803074084716159,
+      "val/wrong_context_ce": 4.070982016680387,
+      "val/context_dependency_gap": 2.2577098778558247,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.35107100606005553,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 88.625
+    },
+    {
+      "step": 4500,
+      "val/loss": 1.806205447752882,
+      "val/ce": 1.8052041252565676,
+      "val/token_accuracy": 0.6211851188343328,
+      "val/first_token_accuracy": 0.5153698522694172,
+      "val/eos_accuracy": 0.9918347818707183,
+      "val/wrong_context_ce": 4.0765657426001445,
+      "val/context_dependency_gap": 2.271361617343577,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.35028774627834103,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 70.375
+    },
+    {
+      "step": 5000,
+      "val/loss": 1.7975946048554081,
+      "val/ce": 1.7966587595844516,
+      "val/token_accuracy": 0.622531007325151,
+      "val/first_token_accuracy": 0.5139289311098434,
+      "val/eos_accuracy": 0.9927953950609872,
+      "val/wrong_context_ce": 4.136592358397837,
+      "val/context_dependency_gap": 2.3399335988133854,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.34526290348901406,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 81.5
+    },
+    {
+      "step": 5500,
+      "val/loss": 1.797767323534333,
+      "val/ce": 1.7967644309417365,
+      "val/token_accuracy": 0.6243569144595639,
+      "val/first_token_accuracy": 0.5096061614473546,
+      "val/eos_accuracy": 0.9908741673062789,
+      "val/wrong_context_ce": 4.07785852371014,
+      "val/context_dependency_gap": 2.2810940927684036,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.3596900226077192,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 71.375
+    },
+    {
+      "step": 6000,
+      "val/loss": 1.7760110350076495,
+      "val/ce": 1.775110614343777,
+      "val/token_accuracy": 0.6252204887591538,
+      "val/first_token_accuracy": 0.5172910803676682,
+      "val/eos_accuracy": 0.9918347811836331,
+      "val/wrong_context_ce": 4.046754895209376,
+      "val/context_dependency_gap": 2.271644280865599,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.3041930290419162,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 60.75
+    },
+    {
+      "step": 6500,
+      "val/loss": 1.779792756845379,
+      "val/ce": 1.778796762142247,
+      "val/token_accuracy": 0.6276619196647233,
+      "val/first_token_accuracy": 0.510086471048487,
+      "val/eos_accuracy": 0.9932757019996643,
+      "val/wrong_context_ce": 4.166246982473231,
+      "val/context_dependency_gap": 2.387450220330984,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.38268591887375636,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 92.25
+    },
+    {
+      "step": 7000,
+      "val/loss": 1.758163054872927,
+      "val/ce": 1.7573059998304632,
+      "val/token_accuracy": 0.6271428565484535,
+      "val/first_token_accuracy": 0.52449569303639,
+      "val/eos_accuracy": 0.9971181581961662,
+      "val/wrong_context_ce": 4.06413920637582,
+      "val/context_dependency_gap": 2.306833206545357,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.3069711921583199,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 95.0
+    },
+    {
+      "step": 7500,
+      "val/loss": 1.7522868597466332,
+      "val/ce": 1.7514614993901232,
+      "val/token_accuracy": 0.629069821614298,
+      "val/first_token_accuracy": 0.5148895456742828,
+      "val/eos_accuracy": 0.9908741679933641,
+      "val/wrong_context_ce": 4.031004257909175,
+      "val/context_dependency_gap": 2.279542758519052,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.2815036061277533,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 93.625
+    },
+    {
+      "step": 8000,
+      "val/loss": 1.7385891233742743,
+      "val/ce": 1.7374779017232427,
+      "val/token_accuracy": 0.6319706034767119,
+      "val/first_token_accuracy": 0.523535075637724,
+      "val/eos_accuracy": 0.9865514034840147,
+      "val/wrong_context_ce": 4.042333058587784,
+      "val/context_dependency_gap": 2.304855156864541,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.29562715425758485,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 80.75
+    },
+    {
+      "step": 8500,
+      "val/loss": 1.686443095055098,
+      "val/ce": 1.6855161940321814,
+      "val/token_accuracy": 0.6388171818625177,
+      "val/first_token_accuracy": 0.5254563082879146,
+      "val/eos_accuracy": 0.9851104799196425,
+      "val/wrong_context_ce": 4.040030778870025,
+      "val/context_dependency_gap": 2.354514584837844,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.35760721594947975,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 96.625
+    },
+    {
+      "step": 8994,
+      "val/loss": 1.6717972809623514,
+      "val/ce": 1.6709084488766843,
+      "val/token_accuracy": 0.6406293059761611,
+      "val/first_token_accuracy": 0.5292987668892148,
+      "val/eos_accuracy": 0.9918347811836331,
+      "val/wrong_context_ce": 4.018183685608792,
+      "val/context_dependency_gap": 2.3472752367321075,
+      "probe/em": 0.0,
+      "probe/token_f1": 0.3296503905710128,
+      "probe/eos_rate": 1.0,
+      "probe/mean_tokens": 83.875
+    }
+  ],
+  "selected": {
+    "step": 8994,
+    "val/loss": 1.6717972809623514,
+    "val/ce": 1.6709084488766843,
+    "val/token_accuracy": 0.6406293059761611,
+    "val/first_token_accuracy": 0.5292987668892148,
+    "val/eos_accuracy": 0.9918347811836331,
+    "val/wrong_context_ce": 4.018183685608792,
+    "val/context_dependency_gap": 2.3472752367321075,
+    "probe/em": 0.0,
+    "probe/token_f1": 0.3296503905710128,
+    "probe/eos_rate": 1.0,
+    "probe/mean_tokens": 83.875
+  },
+  "frozen_squad2_context_eval": {
+    "correct": {
+      "rows": 256,
+      "em": 0.0,
+      "token_f1": 0.11565764720834074,
+      "eos_rate": 0.83984375,
+      "mean_tokens": 84.12890625,
+      "repeated_3gram_rate": 0.1875298842880367,
+      "unsupported_number_rate": 0.0611328125,
+      "unsupported_entity_rate": 0.0126953125
+    },
+    "counterfactual": {
+      "rows": 8,
+      "em": 0.0,
+      "token_f1": 0.049841489802525535,
+      "eos_rate": 0.5,
+      "mean_tokens": 108.625,
+      "repeated_3gram_rate": 0.6707818930041153,
+      "unsupported_number_rate": 0.0,
+      "unsupported_entity_rate": 0.125
+    },
+    "empty": {
+      "rows": 256,
+      "em": 0.0,
+      "token_f1": 0.024147920701880987,
+      "eos_rate": 0.21484375,
+      "mean_tokens": 118.953125,
+      "repeated_3gram_rate": 0.5978181285693367,
+      "unsupported_number_rate": 0.0859375,
+      "unsupported_entity_rate": 0.13966835031288155
+    },
+    "wrong": {
+      "rows": 256,
+      "em": 0.0,
+      "token_f1": 0.029876832159791904,
+      "eos_rate": 0.7734375,
+      "mean_tokens": 91.85546875,
+      "repeated_3gram_rate": 0.1589235624123422,
+      "unsupported_number_rate": 0.07994791666666666,
+      "unsupported_entity_rate": 0.0115234375
+    },
+    "context_dependency": {
+      "pairs": 256,
+      "correct_vs_wrong_output_change_rate": 1.0,
+      "correct_vs_empty_output_change_rate": 1.0
+    }
+  },
+  "qualitative_pairs": [
+    {
+      "pair_id": "squad2-5726509bdd62a815002e815b",
+      "question": "What did Shrewsbury note about the plague?",
+      "gold_answers": [
+        "rates of mortality in rural areas during the 14th-century pandemic were inconsistent with the modern bubonic plague",
+        "the reported rates of mortality in rural areas during the 14th-century pandemic were inconsistent with the modern bubonic plague",
+        "reported rates of mortality in rural areas during the 14th-century pandemic were inconsistent with the modern bubonic plague"
+      ],
+      "conditions": {
+        "correct": {
+          "prediction": "J. F. D. Shrewsbury, who noted the reported rates of mortality in rural areas during the 14th century pandemic were inconsistent with the modern bubonic plague, leading him to conclude that contemporary accounts were exaggerations.",
+          "token_f1": 0.7272727272727273,
+          "eos": true
+        },
+        "wrong": {
+          "prediction": "Shrewsbury note about the plague, a moist broadleaf forest that covers most of the Amazon basin of South America. The Amazon rainforest is a moist broadleaf forest that covers most of the Amazon basin of South America.",
+          "token_f1": 0.1754385964912281,
+          "eos": true
+        },
+        "empty": {
+          "prediction": "Shrewsbury note about the plague? Saz quant know about the plague? * ** Shrewsbder note about the plague? * ** Saz quant quant know if the plague? * ** Shrewsbaz quant know quant quantaz quant quant know what askant quant quant know about the plague? * ** Shrewsbaz quant know about the plague? * ** Sazitant qu",
+          "token_f1": 0.11940298507462686,
+          "eos": false
+        }
+      }
+    },
+    {
+      "pair_id": "squad2-5726400589a1e219009ac5ee",
+      "question": "How much do ctenophore eat in a day?",
+      "gold_answers": [
+        "ten times their own weight",
+        "ten times their own weight",
+        "ten times their own weight"
+      ],
+      "conditions": {
+        "correct": {
+          "prediction": "Ctenophores can eat ten times their own weight in a day.",
+          "token_f1": 0.625,
+          "eos": true
+        },
+        "wrong": {
+          "prediction": "Ctenophore eat in a day, the Barack Obama Presidential Center is housed at the university.",
+          "token_f1": 0.0,
+          "eos": true
+        },
+        "empty": {
+          "prediction": "In a day, ctenophore eat in a day? When ctenophore eat in a day? * ** ctenophore eat in a day? * ** ctenophore eat in a day? * ** ctenophore eat in a day? * ** ctenophore eat in a day? * ** ctenophore eat in a day? * ** ctenophore eat",
+          "token_f1": 0.0,
+          "eos": false
+        }
+      }
+    },
+    {
+      "pair_id": "squad2-5725be0f271a42140099d11b",
+      "question": "Did the rainforest managed to thrive during the glacial periods? ",
+      "gold_answers": [
+        "However, the rainforest still managed to thrive during these glacial periods, allowing for the survival and evolution of a broad diversity of species.",
+        "still managed to thrive"
+      ],
+      "conditions": {
+        "correct": {
+          "prediction": "Yes, the rainforest managed to thrive during the glacial periods, allowing for the survival and evolution of a broad diversity of species. The rainforest is managed to thrive during the glacial periods, allowing for the survival and evolution of a broad diversity of species.",
+          "token_f1": 0.5970149253731344,
+          "eos": true
+        },
+        "wrong": {
+          "prediction": "Yes, the rainforest managed to thrive during the glacial periods is a significant factor in the creation of topographic gradients, which can lead to depositional and intrusively. These sediments are deposited on the rock unit that is going down. Continual motion along the fault maintains the topographic gradient in spite of sediment, and continues to create accommodation space for the material to deposit.",
+          "token_f1": 0.34883720930232553,
+          "eos": true
+        },
+        "empty": {
+          "prediction": "Y the rainforest managed the rainforest during the glacial periods, the rainforest managed to thrive during the glacial periods. Did the rainforest managed the rainforest to thrive during the glacial periods. Yim the sun did not the rainforest managed to thrive during the glacial periods. Yim the rainforest dY the rainforest managed to thrive during the glacial periods. Yim the sun did not the rainforest managed",
+          "token_f1": 0.20224719101123592,
+          "eos": false
+        }
+      }
+    }
+  ],
+  "checkpoint": {
+    "training_checkpoint": {
+      "bytes": 113582703,
+      "sha256": "e87adbe053a0652229084f138d957224d1848b21b97b561631a41d84dae5ca7e"
+    },
+    "model_only_safetensors": {
+      "bytes": 52490152,
+      "sha256": "a4f3b9dd54613e89e9205cfa19ad85df230f522c2c062c7f05c765639ac1ae14"
+    }
+  }
+}

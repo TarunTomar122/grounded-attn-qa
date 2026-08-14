@@ -216,3 +216,34 @@ EOS weight from 100 to 20. EOS remained 100% in free generation while validation
 token F1 improved from 32.6% to 36.5%, token accuracy from 50.9% to 53.0%, and
 the wrong-context CE gap from 2.29 to 2.98. Full N1 therefore uses EOS weight 20.
 W&B run: `gvxf1lcm`.
+
+### N1 full-corpus result
+
+The four prepared parts contained 215,870 unique training rows and 2,082
+validation rows. The one-pass run consumed 211,574,241 actual source+target
+tokens in 8,994 steps. It sustained about 193k actual tokens/s with 6.53 GB peak
+allocated VRAM. W&B run: `6qg5u5xy`.
+
+| Metric | Public N0 | N1 step 500 | N1 final |
+|---|---:|---:|---:|
+| Validation CE | 8.003 | 2.343 | **1.671** |
+| Validation token accuracy | 10.7% | 54.6% | **64.1%** |
+| First-token accuracy | 0% | 45.2% | **52.9%** |
+| EOS accuracy | 0.10% | 98.8% | **99.2%** |
+| Wrong-context CE gap | 1.06 | 2.10 | **2.35** |
+| Eight-row free-run token F1 | 0% | 29.0% | **33.0%** |
+
+The final checkpoint was also the best full-validation checkpoint. On the frozen
+256-question SQuAD2 transfer slice it moved from 0 to 11.57% correct-context
+token F1, versus 2.99% with wrong context and 2.41% with empty context. Every
+correct-context prediction changed after both wrong- and empty-context swaps.
+This establishes context dependence, but not yet strong human QA: EM remained
+0%, correct-context EOS was 84.0%, and the eight counterfactual examples reached
+only 4.98% F1. N2 therefore begins from a useful evidence-sensitive model while
+retaining natural short-answer and counterfactual obedience as explicit gaps.
+
+The selected model-only artifact is 52,490,152 bytes with SHA-256
+`a4f3b9dd54613e89e9205cfa19ad85df230f522c2c062c7f05c765639ac1ae14`.
+Exact tensor hashes, the complete validation curve, frozen evaluation summary,
+and qualitative context-swap pairs are stored in
+`artifacts/needle_n1_summary_2026-08-14.json`.
