@@ -259,6 +259,7 @@ def main() -> None:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--evaluate-only", action="store_true")
     parser.add_argument("--answerability-weight", type=float, default=0.0)
+    parser.add_argument("--answerability-pos-weight", type=float)
     parser.add_argument("--answerability", action="store_true")
     args = parser.parse_args()
     if args.answerability_weight and not args.answerability:
@@ -270,6 +271,13 @@ def main() -> None:
     torch.set_float32_matmul_precision("high")
     device = torch.device("cuda")
     train, validation = load_split(args.data_dir, "train"), load_split(args.data_dir, "validation")
+    answerability_pos_weight = None
+    if args.answerability:
+        positives = int(train["answerable"].sum())
+        negatives = len(train["answerable"]) - positives
+        if args.answerability_pos_weight is None:
+            args.answerability_pos_weight = negatives / max(positives, 1)
+        answerability_pos_weight = torch.tensor(args.answerability_pos_weight, device=device)
     model_class = NeedleAnswerablePointerModel if args.answerability else NeedlePointerModel
     eager = model_class(NeedleConfig.public_checkpoint()).to(device=device, dtype=torch.bfloat16)
     load_start(eager, args.checkpoint, device)
@@ -321,7 +329,7 @@ def main() -> None:
         output = model(source, source_valid, context_mask, decoder, valid)
         loss_valid = valid & answerable[:, None] if args.answerability else valid
         loss = pointer_loss(output, source, target, loss_valid, gold, z_weight=args.z_loss, pointer_weight=args.pointer_weight, first_token_weight=args.first_token_weight, eos_token_weight=args.eos_token_weight)
-        answerability_loss = F.binary_cross_entropy_with_logits(output.answerability_logits, answerable.float()) if output.answerability_logits is not None else loss.total.new_zeros(())
+        answerability_loss = F.binary_cross_entropy_with_logits(output.answerability_logits, answerable.float(), pos_weight=answerability_pos_weight) if output.answerability_logits is not None else loss.total.new_zeros(())
         total_loss = loss.total + args.answerability_weight * answerability_loss
         total_loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
