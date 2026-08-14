@@ -247,3 +247,30 @@ The selected model-only artifact is 52,490,152 bytes with SHA-256
 Exact tensor hashes, the complete validation curve, frozen evaluation summary,
 and qualitative context-swap pairs are stored in
 `artifacts/needle_n1_summary_2026-08-14.json`.
+
+### N2 matched natural-QA result
+
+N2 started both arms from the same N1 checkpoint and trained each for one pass
+over 189,335 answerable SQuAD2 and CoQA rows (7,888 steps, batch 24). N2-GEN
+continued ordinary vocabulary generation. N2-PG added the existing
+pointer-generator and explicit gold source-position loss.
+
+| Frozen SQuAD2 metric | N2-GEN | N2-PG |
+|---|---:|---:|
+| Correct-context EM | **52.34%** | 49.22% |
+| Correct-context token F1 | **65.31%** | 63.47% |
+| Wrong-context token F1 | 2.80% | **1.23%** |
+| Empty-context token F1 | 8.09% | **0.52%** |
+| Counterfactual EM | **87.5%** | 62.5% |
+| Correct/wrong output change | 99.61% | **100%** |
+| Correct/empty output change | 99.22% | **100%** |
+
+N2-PG finished with 88.13% strict gold source-position accuracy and mean
+`p_gen=0.223`, so about 77.7% of its output probability came from copying. The
+pointer arm gives measurable provenance and cleaner unsupported-context
+behavior, while costing 3.13 percentage points of correct-context EM and 1.85
+points of F1. This is a positive grounding tradeoff rather than a blanket
+quality win. W&B runs: N2-GEN `pc1x9sjl`; N2-PG `xk8up6zo`.
+
+Exact checkpoint hashes and frozen-evaluation numbers are stored in
+`artifacts/needle_n2_summary_2026-08-14.json`.

@@ -1,0 +1,74 @@
+{
+  "stage": "N2 matched natural-QA adaptation",
+  "status": "completed",
+  "starting_checkpoint": "N1 step 8994",
+  "data": {
+    "train_rows": 189335,
+    "validation_rows": 13607,
+    "mixture": {
+      "squad2_answerable": 82065,
+      "coqa_answerable": 107270
+    },
+    "manifest": "artifacts/needle_n2_manifest_2026-08-14.json"
+  },
+  "training": {
+    "steps": 7888,
+    "epochs": 1,
+    "batch_size": 24,
+    "dtype": "BF16",
+    "generator": {
+      "wandb_run_id": "pc1x9sjl",
+      "checkpoint_bytes": 113582831,
+      "checkpoint_sha256": "a711cdffa2f8dd74de4c5532fec46d58fef33ee9cf8c6fb760c35dc96a186cdf"
+    },
+    "pointer_generator": {
+      "wandb_run_id": "xk8up6zo",
+      "wandb_url": "https://wandb.ai/tomartarun2001-adobe/grounded-attn-qa/runs/xk8up6zo",
+      "runtime_seconds": 1185.6,
+      "peak_allocated_vram_gb": 7.077,
+      "checkpoint_bytes": 115692871,
+      "checkpoint_sha256": "1ef6c5180933c7c2f3658ddcaefa3ecf1770329eaee9a2c2d5c93dc198bd511f"
+    }
+  },
+  "validation": {
+    "generator": {
+      "sequence_nll": 0.9072278,
+      "token_accuracy": 0.8504,
+      "first_token_accuracy": 0.4767,
+      "eos_accuracy": 0.9158,
+      "context_dependency_gap": 2.311
+    },
+    "pointer_generator": {
+      "sequence_nll": 0.8437018,
+      "pointer_position_nll": 0.5114437,
+      "strict_pointer_position_accuracy": 0.8812795,
+      "mean_p_gen": 0.222667,
+      "expected_copy_probability": 0.777333
+    }
+  },
+  "frozen_context_evaluation": {
+    "set_sha256": "8e077daa0479dfeade00f8874e1e4998f8ff2ecdaaed575cf841a165cbb5db4a",
+    "rows": 776,
+    "generator": {
+      "correct_em": 0.5234375,
+      "correct_token_f1": 0.6531224770469248,
+      "wrong_token_f1": 0.02797109127960458,
+      "empty_token_f1": 0.08094542840164938,
+      "counterfactual_em": 0.875,
+      "counterfactual_token_f1": 0.9583333333333334,
+      "correct_vs_wrong_output_change": 0.99609375,
+      "correct_vs_empty_output_change": 0.9921875
+    },
+    "pointer_generator": {
+      "correct_em": 0.4921875,
+      "correct_token_f1": 0.6346594180064575,
+      "wrong_token_f1": 0.012325924486697512,
+      "empty_token_f1": 0.005208333333333334,
+      "counterfactual_em": 0.625,
+      "counterfactual_token_f1": 0.7361111111111112,
+      "correct_vs_wrong_output_change": 1.0,
+      "correct_vs_empty_output_change": 1.0
+    }
+  },
+  "conclusion": "The pointer-generator establishes explicit 88.1% strict source-position provenance and stronger context dependence, at a 3.13 percentage-point EM and 1.85 percentage-point token-F1 cost on correct contexts. N3 adds supervised refusal to the pointer-generator arm."
+}
