@@ -1,0 +1,117 @@
+{
+  "datasets": {
+    "coqa": {
+      "name": "stanfordnlp/coqa",
+      "revision": "0d9e9952f1ef6e5415492d3d84b5873259137e3c",
+      "splits": {
+        "train": {
+          "dataset_fingerprint": "a327656944cdb273",
+          "file": {
+            "bytes": 441956648,
+            "path": "n2-coqa-train.pt",
+            "sha256": "21f85b46d2ebcb972ad2add92531bea9fda32639666087a589b8ebe5a2aebb32"
+          },
+          "official_rows": 7199,
+          "stats": {
+            "copyable_target_tokens": 508117,
+            "dropped_invalid_rationale": 0,
+            "dropped_source_length_or_alignment": 0,
+            "dropped_target_length": 1,
+            "dropped_unanswerable": 1376,
+            "input_conversations": 7199,
+            "input_turns": 108647,
+            "kept_rows": 107270,
+            "source_tokens": 66656188,
+            "target_tokens": 705293,
+            "zero_copy_rows": 23258
+          }
+        },
+        "validation": {
+          "dataset_fingerprint": "3fe50f49fd135596",
+          "file": {
+            "bytes": 32622141,
+            "path": "n2-coqa-validation.pt",
+            "sha256": "c693e37650f7e4ba111f4f896bb0451982dfb094c5c19f420c31b78ea1ce6d85"
+          },
+          "official_rows": 500,
+          "stats": {
+            "copyable_target_tokens": 35096,
+            "dropped_invalid_rationale": 0,
+            "dropped_source_length_or_alignment": 0,
+            "dropped_target_length": 0,
+            "dropped_unanswerable": 66,
+            "input_conversations": 500,
+            "input_turns": 7983,
+            "kept_rows": 7917,
+            "source_tokens": 4725298,
+            "target_tokens": 49525,
+            "zero_copy_rows": 1764
+          }
+        }
+      }
+    },
+    "squad2": {
+      "name": "rajpurkar/squad_v2",
+      "revision": "3ffb306f725f7d2ce8394bc1873b24868140c412",
+      "splits": {
+        "train": {
+          "dataset_fingerprint": "a0114d6fbfd1c4c4",
+          "file": {
+            "bytes": 338112074,
+            "path": "n2-squad2-train.pt",
+            "sha256": "1b2dd3bf253cce06f1f39e80dfa1e6c478083a69a810c252c1b5593b87e8240d"
+          },
+          "official_rows": 130319,
+          "stats": {
+            "copyable_target_tokens": 632520,
+            "dropped_invalid_span": 0,
+            "dropped_source_length_or_alignment": 0,
+            "dropped_target_length": 0,
+            "dropped_token_boundary_alignment": 4756,
+            "dropped_unanswerable": 43498,
+            "input_rows": 130319,
+            "kept_rows": 82065,
+            "source_tokens": 22079860,
+            "target_tokens": 714585
+          }
+        },
+        "validation": {
+          "dataset_fingerprint": "461c0301636b3e0b",
+          "file": {
+            "bytes": 23447135,
+            "path": "n2-squad2-validation.pt",
+            "sha256": "0aa05ad95903c4aa91e171ddcd262f01bb8187a74d616ecc06c72e88416f87a3"
+          },
+          "official_rows": 11873,
+          "stats": {
+            "copyable_target_tokens": 43652,
+            "dropped_invalid_span": 0,
+            "dropped_source_length_or_alignment": 0,
+            "dropped_target_length": 0,
+            "dropped_token_boundary_alignment": 238,
+            "dropped_unanswerable": 5945,
+            "input_rows": 11873,
+            "kept_rows": 5690,
+            "source_tokens": 1604655,
+            "target_tokens": 49342
+          }
+        }
+      }
+    }
+  },
+  "format": {
+    "context": "context_start through source_lengths; remaining cells are PAD=0",
+    "coqa_alignment": "Exact target token IDs are greedily matched left-to-right only within the annotated rationale; paraphrased, reordered, absent, and EOS tokens remain -1.",
+    "coqa_history_turns": "up to 4 most recent turns; oldest turns are dropped if evidence would not fit",
+    "gold_copy_positions": "absolute source positions; -1 means no defensible copy target",
+    "source": "NeedleTokenizer.encode_source(query, context) = query_ids + [5] + context_ids",
+    "source_length": 1024,
+    "target": "natural answer token IDs followed by EOS=1",
+    "target_length": 512,
+    "vocab_size": 8192
+  },
+  "tokenizer": {
+    "path": "/root/autodl-tmp/needle26-public/tokenizer.model",
+    "sha256": "0823f5b9133c68a8140addc5d7a425fa9119c4c8cb4a550363b4bffa4ba1c8c7"
+  }
+}

@@ -95,20 +95,30 @@ The faithful PyTorch port now uses scaled-dot-product attention. At the maximum
 The measured N1 training loop, including CE, z-loss, clipping, and AdamW,
 sustained about 405k–412k padded tokens/s and 250k actual tokens/s after compile.
 
-### Preliminary N1 data decision
+### Full N1 data audit
 
-A complete 1,590-row RAG shard showed that raw citation-heavy answers have a
-median length of 623 tokens. Removing inline `<ref>quoted evidence</ref>` blocks
-while retaining their source IDs for evidence selection reduces the median
-target to 286 tokens. We therefore train N1 on the clean answer text and reserve
-explicit provenance supervision for N2-PG.
+All 796,582 English RAG rows were extracted from the pinned SYNTH revision into
+four Parquet parts totaling 3,474,885,339 bytes. The extraction manifests are:
 
-The same shard had a median of five sources and only 15.5% of full contexts fit
-1,024 tokens. Keeping all gold-cited sources first and filling the remainder
-with deterministically shuffled distractors raised context fit to 39.5%.
-Conservative unsupported-answer filtering plus the 512-token target limit left
-399 usable rows (25.1%). This is a preliminary single-shard rate; the full
-extracted corpus audit will replace it.
+| Start shard | Rows | Bytes | SHA-256 |
+|---:|---:|---:|---|
+| 0 | 199,143 | 867,953,059 | `5baa2408e806f5b5d338f2097262cbd145a31aa738ca49187c9acef39f766397` |
+| 125 | 199,147 | 869,792,192 | `5c77f28f0456d853900f5255e1af399a83f5c3bd389ba8dac7c1bf0cefc82ffc` |
+| 250 | 199,145 | 868,709,848 | `50d940b72afe022191edeeb02a9e67f7702012fdaf3673bc90e6dffbbeb00477` |
+| 375 | 199,147 | 868,430,240 | `5c003dd2e6e736b58604bad365de0b73e414582992ea7deb9d538fe555e7bb50` |
+
+A deterministic 2.5% hash sample (`20,126` rows) replaced the preliminary
+single-shard audit. Citation parsing succeeded for every sampled row; 99.71%
+had citations, 0.035% cited a missing source, and 22.17% appeared unsupported.
+After removing citation quote blocks, requiring a 512-token target, and packing
+gold evidence plus deterministic distractors into 1,024 source tokens, 27.13%
+were usable. This estimates **216,145 N1 rows** in the full corpus.
+
+Median clean target length is 287 tokens. Median full context length is 3,070
+tokens, while evidence-first packing has a median of 828 tokens and fits 41.01%
+of examples before the other quality gates. N1 trains on clean answer text;
+explicit provenance supervision remains reserved for N2-PG. The exact audit is
+stored in `artifacts/synth_rag_content_audit_2026-08-14.json`.
 
 ### N2 dataset audit
 
@@ -130,6 +140,24 @@ evaluation-only candidate: its public release has 2,366 questions, over 35,000
 human-annotated grounding passages, relevance/correctness labels, and
 human-written answers. Its CC-BY-NC-4.0 license and direct grounding focus make
 it suitable for research evaluation, not inclusion in the training mixture.
+
+The pinned SQuAD2 and CoQA releases have now been converted into fixed
+1,024-source / 512-target tensors for matched N2-GEN and N2-PG runs:
+
+| Dataset split | Kept rows | Source tokens | Target tokens | Copyable target tokens |
+|---|---:|---:|---:|---:|
+| SQuAD2 train | 82,065 | 22,079,860 | 714,585 | 632,520 |
+| SQuAD2 validation | 5,690 | 1,604,655 | 49,342 | 43,652 |
+| CoQA train | 107,270 | 66,656,188 | 705,293 | 508,117 |
+| CoQA validation | 7,917 | 4,725,298 | 49,525 | 35,096 |
+
+SQuAD2 excludes unanswerable rows at N2 and drops 4,994 examples whose answer
+boundaries do not align exactly after SentencePiece tokenization. CoQA retains
+natural answers and maps only tokens defensibly found inside the annotated
+rationale; 25,022 retained rows therefore have no copyable answer token and
+remain useful to the generator arm. The exact revisions, drop counts, tensor
+hashes, and alignment contract are stored in
+`artifacts/needle_n2_manifest_2026-08-14.json`.
 
 ### Next measured gates
 

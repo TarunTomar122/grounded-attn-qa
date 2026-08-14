@@ -1,0 +1,85 @@
+{
+  "input": "/root/autodl-tmp/datasets/synth-rag/part-*.parquet",
+  "total_rows": 796582,
+  "sampling": "hash(synth_id) % 1000 < 25",
+  "counts": {
+    "sample_rows": 20126,
+    "parsed_sources": 20126,
+    "has_citations": 20068,
+    "missing_cited_source": 7,
+    "appears_unsupported": 4462,
+    "full_context_fits_1024": 3242,
+    "target_fits_512": 17285,
+    "evidence_context_fits_1024": 8254,
+    "n1_answerable_usable": 5461
+  },
+  "rates": {
+    "parsed_sources": 1.0,
+    "has_citations": 0.9971181556195965,
+    "missing_cited_source": 0.00034780880453145184,
+    "appears_unsupported": 0.2217032694027626,
+    "full_context_fits_1024": 0.16108516347013813,
+    "target_fits_512": 0.8588393123323065,
+    "evidence_context_fits_1024": 0.4101162675146577,
+    "n1_answerable_usable": 0.2713405545066084
+  },
+  "estimated_n1_answerable_usable_rows": 216145,
+  "lengths": {
+    "sources": {
+      "p0": 1,
+      "p50": 5,
+      "p90": 9,
+      "p95": 10,
+      "p99": 10,
+      "max": 10
+    },
+    "citations": {
+      "p0": 0,
+      "p50": 2,
+      "p90": 4,
+      "p95": 5,
+      "p99": 6,
+      "max": 9
+    },
+    "query_tokens": {
+      "p0": 6,
+      "p50": 45,
+      "p90": 99,
+      "p95": 130,
+      "p99": 175,
+      "max": 1473
+    },
+    "full_source_tokens": {
+      "p0": 47,
+      "p50": 3070,
+      "p90": 6715,
+      "p95": 7903,
+      "p99": 9804,
+      "max": 11485
+    },
+    "evidence_source_tokens": {
+      "p0": 47,
+      "p50": 828,
+      "p90": 995,
+      "p95": 1010,
+      "p99": 1021,
+      "max": 1024
+    },
+    "raw_target_tokens": {
+      "p0": 1,
+      "p50": 612,
+      "p90": 1149,
+      "p95": 1322,
+      "p99": 1688,
+      "max": 4458
+    },
+    "clean_target_tokens": {
+      "p0": 1,
+      "p50": 287,
+      "p90": 560,
+      "p95": 655,
+      "p99": 858,
+      "max": 3730
+    }
+  }
+}
