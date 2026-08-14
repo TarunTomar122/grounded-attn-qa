@@ -660,6 +660,7 @@ def main() -> None:
     parser.add_argument("--lambda-pointer-position", type=float, default=None)
     parser.add_argument("--lambda-start", type=float, default=None)
     parser.add_argument("--first-pointer-weight", type=float, default=None)
+    parser.add_argument("--start-head-mode", choices=["context", "global"], default=None)
     parser.add_argument("--squad-train-max", type=int, default=None)
     parser.add_argument("--squad-val-max", type=int, default=None)
     parser.add_argument("--wandb-project", default="grounded-attn-qa")
@@ -687,6 +688,8 @@ def main() -> None:
     cfg.sep_id = tokenizer_info.sep_id
     cfg.question_id = tokenizer_info.question_id
     cfg.context_id = tokenizer_info.context_id
+    if args.start_head_mode is not None:
+        cfg.answer_start_mode = args.start_head_mode
 
     model = GroundedPointerGenerator(cfg).to(device)
     if copy_only:

@@ -1,0 +1,11 @@
+# Reserved for the later parameter-matched comparison. The main model must
+# continue to use configs/attn_pg_23m.yaml with transformer_ffn=false.
+model_name: ffn_param_matched_v1
+architecture:
+  type: encoder_decoder_pointer_generator
+  d_model: 288
+  n_heads: 6
+  encoder_layers: 6
+  decoder_layers: 6
+  transformer_ffn: true
+  ffn_dim: 1152

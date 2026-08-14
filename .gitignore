@@ -2,3 +2,7 @@ __pycache__/
 *.pt
 .venv/
 .env
+wandb/
+*.log
+artifacts/phase-a1-v6/*.jsonl
+artifacts/synth_day1_parallel/*.jsonl

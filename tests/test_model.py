@@ -169,6 +169,19 @@ class ModelTests(unittest.TestCase):
         self.assertGreater(loss.start_head.item(), 0.0)
         self.assertGreater(loss.total.item(), loss.sequence.item())
 
+    def test_global_start_head_has_same_source_shape(self) -> None:
+        self.cfg.answer_start_mode = "global"
+        model = GroundedPointerGenerator(self.cfg).eval()
+        output = model(
+            self.source,
+            self.types,
+            self.valid,
+            self.context,
+            torch.tensor([[1, 11, 14]]),
+            torch.ones((1, 3), dtype=torch.bool),
+        )
+        self.assertEqual(output.answer_start_logits.shape, self.source.shape)
+
     def test_rope_accepts_configured_head_dimension(self) -> None:
         rope = RotaryEmbedding(self.cfg.head_dim)
         q = torch.randn(2, self.cfg.n_heads, 5, self.cfg.head_dim)

@@ -1,0 +1,67 @@
+{
+  "dataset_version": "synthetic_procedural_copy_v6",
+  "seed": 42,
+  "training": {
+    "mode": "online",
+    "row_function": "procedural_copy_row(seed, global_example_index)",
+    "materialized_rows": 0,
+    "relations": [
+      "identifier",
+      "access_code",
+      "serial_number",
+      "registry_key"
+    ]
+  },
+  "validation": {
+    "familiar_unseen_values": {
+      "rows": 1000,
+      "relations": 4,
+      "unique_questions": 1000,
+      "unique_evidence": 1000,
+      "duplicate_question_pct": 0.0,
+      "duplicate_evidence_pct": 0.0,
+      "estimated_question_combinations": 60,
+      "estimated_evidence_combinations": 60
+    },
+    "novel_combinations": {
+      "rows": 1000,
+      "relations": 4,
+      "unique_questions": 1000,
+      "unique_evidence": 1000,
+      "duplicate_question_pct": 0.0,
+      "duplicate_evidence_pct": 0.0,
+      "estimated_question_combinations": 60,
+      "estimated_evidence_combinations": 60
+    },
+    "hard_distractors": {
+      "rows": 1000,
+      "relations": 4,
+      "unique_questions": 1000,
+      "unique_evidence": 1000,
+      "duplicate_question_pct": 0.0,
+      "duplicate_evidence_pct": 0.0,
+      "estimated_question_combinations": 60,
+      "estimated_evidence_combinations": 60
+    },
+    "access_code": {
+      "rows": 1000,
+      "relations": 1,
+      "unique_questions": 1000,
+      "unique_evidence": 1000,
+      "duplicate_question_pct": 0.0,
+      "duplicate_evidence_pct": 0.0,
+      "estimated_question_combinations": 60,
+      "estimated_evidence_combinations": 60
+    }
+  },
+  "test": {
+    "rows": 10000,
+    "relations": 4,
+    "unique_questions": 10000,
+    "unique_evidence": 10000,
+    "duplicate_question_pct": 0.0,
+    "duplicate_evidence_pct": 0.0,
+    "estimated_question_combinations": 60,
+    "estimated_evidence_combinations": 60
+  }
+}

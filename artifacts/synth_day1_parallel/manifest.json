@@ -1,0 +1,47 @@
+{
+  "dataset": "PleIAs/SYNTH",
+  "parts": [
+    [
+      "synth_001.parquet"
+    ],
+    [
+      "synth_002.parquet"
+    ],
+    [
+      "synth_003.parquet"
+    ],
+    [
+      "synth_004.parquet"
+    ]
+  ],
+  "source_disjoint": true,
+  "train_exercise_distribution_before_cap": {
+    "mcq": 8661,
+    "cooking": 7,
+    "memorization": 544,
+    "rag": 44,
+    "math mcq": 2612
+  },
+  "train_exercise_distribution_after_cap": {
+    "math mcq": 2612,
+    "mcq": 3000,
+    "memorization": 544,
+    "rag": 44,
+    "cooking": 7
+  },
+  "validation_exercise_distribution": {
+    "mcq": 102,
+    "math mcq": 28,
+    "rag": 1,
+    "memorization": 5
+  },
+  "train_exercise_cap": 3000,
+  "counts": {
+    "train": 6207,
+    "validation": 136
+  },
+  "unique_source_urls": {
+    "train": 10591,
+    "validation": 122
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "train": {
+    "seen": 130319,
+    "unanswerable": 43498,
+    "empty_answer": 0,
+    "invalid_span": 0,
+    "alignment_dropped": 1280,
+    "kept": 85541,
+    "windowed": 28285
+  },
+  "validation": {
+    "seen": 11873,
+    "unanswerable": 5945,
+    "empty_answer": 0,
+    "invalid_span": 0,
+    "alignment_dropped": 79,
+    "kept": 5849,
+    "windowed": 2201
+  }
+}

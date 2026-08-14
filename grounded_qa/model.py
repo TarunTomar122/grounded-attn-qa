@@ -88,6 +88,7 @@ class GroundedPointerGenerator(nn.Module):
         self.stop_head = nn.Linear(cfg.d_model * 2, 1)
         self.answerability = nn.Linear(cfg.d_model, 1)
         self.answer_start_head = nn.Linear(cfg.d_model, 1)
+        self.answer_start_global_head = nn.Linear(cfg.d_model * 2, 1)
         self.apply(self._init)
 
     def _init(self, module: nn.Module) -> None:
@@ -131,6 +132,11 @@ class GroundedPointerGenerator(nn.Module):
             self.token_embedding.weight,
         )
         stop_probability = torch.sigmoid(self.stop_head(torch.cat((x, pointer_context), dim=-1))).squeeze(-1)
+        if self.cfg.answer_start_mode == "global":
+            global_memory = memory[:, :1].expand(-1, memory.shape[1], -1)
+            answer_start_logits = self.answer_start_global_head(torch.cat((memory, global_memory), dim=-1)).squeeze(-1)
+        else:
+            answer_start_logits = self.answer_start_head(memory).squeeze(-1)
         return GroundedOutput(
             vocab_logits=vocab_logits,
             copy_position_probs=copy_probs,
@@ -140,7 +146,7 @@ class GroundedPointerGenerator(nn.Module):
             decoder_hidden=x,
             memory=memory,
             stop_probability=stop_probability,
-            answer_start_logits=self.answer_start_head(memory).squeeze(-1),
+            answer_start_logits=answer_start_logits,
         )
 
     def forward(
@@ -173,6 +179,7 @@ class GroundedPointerGenerator(nn.Module):
             "stop_head": self.stop_head,
             "answerability": self.answerability,
             "answer_start_head": self.answer_start_head,
+            "answer_start_global_head": self.answer_start_global_head,
         }
         return {name: sum(p.numel() for p in module.parameters()) for name, module in groups.items()}
 

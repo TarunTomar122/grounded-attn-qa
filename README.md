@@ -1,48 +1,100 @@
-# Grounded attention-only reader
+# Grounded attention-only pointer-generator
 
-A ~24M **attention-only** decoder (no MLP) that answers a question **only** if the answer is in the prompt. Otherwise it emits `I don't know this.`
+This repository is the fresh redo of the grounded QA experiment. The canonical
+protocol is in [EXPERIMENT_PLAN.md](EXPERIMENT_PLAN.md). The model is an
+approximately 23.21M parameter encoder-decoder with no Transformer FFNs, RoPE,
+RMSNorm, a context-only pointer-generator, and a separate answerability head.
 
-Meant as a hallucination-free last mile for RAG: retriever stuffs chunks in the window, this model binds Q → span or refuses. No parametric world knowledge.
+The latest restart is the 26.24M-parameter `needleish26m_v1` foundation model.
+Its Day 1 run completed 150,003,051 token exposures on the source-disjoint
+PleIAs/SYNTH split; architecture, data composition, curves, metrics, and manual
+probes are in [the Day 1 report](artifacts/needleish26m_day1_report.md).
 
-Full writeup: [GOAL.md](GOAL.md)
+Current implementation status:
 
-## Status (2026-08-13)
+- [x] 6-layer bidirectional encoder + 6-layer causal decoder
+- [x] No Transformer FFN/MLP blocks
+- [x] RMSNorm and RoPE
+- [x] 32k byte-level BPE tokenizer training
+- [x] Context-only pointer distribution and copy/generate gate
+- [x] Strict Phase A copy-only mode with learned EOS termination
+- [x] Separate answerability loss path
+- [x] Synthetic Phase A generator with held-out prefixes/templates
+- [x] Checkpoint/resume, MPS telemetry, gradient accumulation, W&B hooks
+- [x] Focused tests and 64-row overfit gate
+- [x] 250-step MPS benchmark: [benchmarks/MPS_2026-08-13.md](benchmarks/MPS_2026-08-13.md)
+- [ ] Full Phase A training
+- [ ] SQuAD/NQ Phase B data adapters
+- [ ] CoQA/MS MARCO Phase C data adapters
+- [ ] Refusal/RAG phases and adversarial evaluation
 
-Trained on Colab T4.
-
-| run | result |
-|---|---|
-| 3k steps, SQuAD 2.0 mix | refuse-collapse: always `I don't know this.` |
-| 4k steps, **copy-only** curriculum | **EM 0.375** — synth facts copy correctly (`$2.1 billion`); SQuAD spans still fail |
-
-Phase A gate (copy works) is almost hit. Phase B (mix refuse) is next, synth-only first.
-
-## Train (Colab T4)
+## Setup
 
 ```bash
-# this VPS cannot train it (no GPU). Colab CLI default timeout is 30s — set it.
-colab run --gpu T4 --timeout 3600 train.py --phase copy --steps 4000 --train-n 20000
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
-Phases:
+Keep the W&B credential outside the repository:
 
-- `copy` — 100% answerable (synth templates + SQuAD yes). Teach copy first.
-- `mix` — ~70% yes / 30% refuse (synth traps + cross-paired SQuAD). Only after copy works.
-
-## Contract
-
-```
-Context: <retrieved text>
-
-Question: <user question>
-
-Answer:
+```bash
+export WANDB_API_KEY='your-key'
 ```
 
-Output is either a span that occurs in Context, or `I don't know this.`
+## Tokenizer and gates
 
-## Layout
+Train the tokenizer only on Phase A training text:
 
-- `train.py` — model + Colab-ready train/eval loop (self-contained)
-- `data.py` — curriculum builders (also inlined in `train.py` for `colab run`)
-- `GOAL.md` — metrics, kill criteria, RAG deployment
+```bash
+python scripts/train_tokenizer.py \
+  --output artifacts/tokenizer.json \
+  --train-n 200000
+```
+
+Run the mandatory tiny overfit check:
+
+```bash
+python scripts/overfit_64.py \
+  --tokenizer artifacts/tokenizer.json \
+  --steps 2000 \
+  --batch-size 8
+```
+
+Run the measured MPS benchmark:
+
+```bash
+python scripts/benchmark_mps.py \
+  --steps 250 \
+  --batch-sizes 2,4,8,16 \
+  --precisions fp32,fp16,bf16
+```
+
+## Phase A
+
+The Phase A entrypoint is ready. It uses the measured FP32 starting choice,
+microbatch 16, accumulation 2, cosine decay, warmup, answer-only sequence loss,
+and checkpointing every 250/500-step boundary:
+
+```bash
+WANDB_API_KEY="$WANDB_API_KEY" python scripts/train.py \
+  --phase A \
+  --tokenizer artifacts/tokenizer.json \
+  --train-n 200000 \
+  --val-n 10000 \
+  --steps 4000 \
+  --batch-size 16 \
+  --grad-accum 2 \
+  --precision fp32 \
+  --wandb
+```
+
+The script prints the exact parameter breakdown and measured tokens/sec. Do not
+start Phase B until the Phase A gate in the plan is satisfied.
+
+The first strict-copy probe is documented in [EXPERIMENT_PLAN.md](EXPERIMENT_PLAN.md)
+and synced as [W&B run hai3wnwa](https://wandb.ai/tomartarun2001-adobe/grounded-attn-qa/runs/hai3wnwa).
+
+The old `train.py`, `data.py`, and released causal checkpoint are retained only
+as legacy artifacts from the previous experiment; all redo commands use the
+`grounded_qa/` package and `scripts/` entrypoints.
