@@ -1,0 +1,26 @@
+model_name: attn_pg_23m_v1_global_start
+
+tokenizer:
+  type: byte_level_bpe
+  vocab_size: 32000
+  train_from_scratch: true
+
+architecture:
+  type: encoder_decoder_pointer_generator
+  d_model: 384
+  n_heads: 6
+  head_dim: 64
+  encoder_layers: 6
+  decoder_layers: 6
+  transformer_ffn: false
+  normalization: rmsnorm
+  rmsnorm_eps: 1.0e-5
+  positional_encoding: rope
+  rope_theta: 10000
+  dropout: 0.10
+  answer_start_mode: global
+
+sequence:
+  source_length_initial: 512
+  source_length_rag_phase: 1024
+  target_length: 64

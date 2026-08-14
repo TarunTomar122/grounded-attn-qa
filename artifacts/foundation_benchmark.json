@@ -1,0 +1,148 @@
+{
+  "architecture": {
+    "model_name": "needleish26m_v1",
+    "vocab_size": 8196,
+    "d_model": 512,
+    "encoder_layers": 12,
+    "decoder_layers": 8,
+    "query_heads": 8,
+    "kv_heads": 4,
+    "head_dim": 64,
+    "rope_theta": 10000.0,
+    "rmsnorm_eps": 1e-06,
+    "source_length": 512,
+    "target_length": 256,
+    "pad_id": 0,
+    "eos_id": 1,
+    "bos_id": 2,
+    "unk_id": 3,
+    "query_id": 8192,
+    "context_id": 8193,
+    "reasoning_id": 8194,
+    "answer_id": 8195,
+    "dropout": 0.0
+  },
+  "parameters": 26235420,
+  "results": [
+    {
+      "precision": "fp32",
+      "batch_size": 1,
+      "step_seconds": 0.13348703575320542,
+      "examples_per_sec": 7.491364193964334,
+      "tokens_per_sec": 5753.367700964609,
+      "peak_allocated_gb": 0.7824896,
+      "peak_reserved_gb": 0.8388608,
+      "loss": 0.8824997544288635
+    },
+    {
+      "precision": "fp32",
+      "batch_size": 2,
+      "step_seconds": 0.13441641023382545,
+      "examples_per_sec": 14.87913563917441,
+      "tokens_per_sec": 11427.176170885947,
+      "peak_allocated_gb": 1.217192448,
+      "peak_reserved_gb": 1.270874112,
+      "loss": 1.011644959449768
+    },
+    {
+      "precision": "fp32",
+      "batch_size": 4,
+      "step_seconds": 0.13684385805390775,
+      "examples_per_sec": 29.23039482286633,
+      "tokens_per_sec": 22448.94322396134,
+      "peak_allocated_gb": 2.092888064,
+      "peak_reserved_gb": 2.283798528,
+      "loss": 1.1239075660705566
+    },
+    {
+      "precision": "fp32",
+      "batch_size": 8,
+      "step_seconds": 0.153783505782485,
+      "examples_per_sec": 52.02118367177418,
+      "tokens_per_sec": 39952.269059922575,
+      "peak_allocated_gb": 3.844279296,
+      "peak_reserved_gb": 4.118806528,
+      "loss": 1.1722742319107056
+    },
+    {
+      "precision": "bf16",
+      "batch_size": 1,
+      "step_seconds": 0.1415402553975582,
+      "examples_per_sec": 7.065127847842301,
+      "tokens_per_sec": 5426.018187142887,
+      "peak_allocated_gb": 0.856951808,
+      "peak_reserved_gb": 0.905969664,
+      "loss": 0.7939655780792236
+    },
+    {
+      "precision": "bf16",
+      "batch_size": 2,
+      "step_seconds": 0.13368418556638062,
+      "examples_per_sec": 14.960632714532295,
+      "tokens_per_sec": 11489.765924760803,
+      "peak_allocated_gb": 1.322840576,
+      "peak_reserved_gb": 1.367343104,
+      "loss": 0.8977591395378113
+    },
+    {
+      "precision": "bf16",
+      "batch_size": 4,
+      "step_seconds": 0.13600850896909833,
+      "examples_per_sec": 29.40992464602943,
+      "tokens_per_sec": 22586.822128150605,
+      "peak_allocated_gb": 2.254639104,
+      "peak_reserved_gb": 2.308964352,
+      "loss": 0.9761779308319092
+    },
+    {
+      "precision": "bf16",
+      "batch_size": 8,
+      "step_seconds": 0.1425847541540861,
+      "examples_per_sec": 56.106980353276015,
+      "tokens_per_sec": 43090.16091131598,
+      "peak_allocated_gb": 4.118207488,
+      "peak_reserved_gb": 4.368367616,
+      "loss": 1.047785997390747
+    },
+    {
+      "precision": "fp16",
+      "batch_size": 1,
+      "step_seconds": 0.13672884507104754,
+      "examples_per_sec": 7.313745680221143,
+      "tokens_per_sec": 5616.956682409838,
+      "peak_allocated_gb": 0.856945664,
+      "peak_reserved_gb": 0.90177536,
+      "loss": 0.7348806262016296
+    },
+    {
+      "precision": "fp16",
+      "batch_size": 2,
+      "step_seconds": 0.1371917852666229,
+      "examples_per_sec": 14.578132328500107,
+      "tokens_per_sec": 11196.005628288081,
+      "peak_allocated_gb": 1.322840576,
+      "peak_reserved_gb": 1.375731712,
+      "loss": 0.8269280195236206
+    },
+    {
+      "precision": "fp16",
+      "batch_size": 4,
+      "step_seconds": 0.13672422687523067,
+      "examples_per_sec": 29.255970879617756,
+      "tokens_per_sec": 22468.58563554644,
+      "peak_allocated_gb": 2.254639104,
+      "peak_reserved_gb": 2.308964352,
+      "loss": 0.907924473285675
+    },
+    {
+      "precision": "fp16",
+      "batch_size": 8,
+      "step_seconds": 0.1431729078758508,
+      "examples_per_sec": 55.876493106761664,
+      "tokens_per_sec": 42913.14670599296,
+      "peak_allocated_gb": 4.118207488,
+      "peak_reserved_gb": 4.368367616,
+      "loss": 0.9343016743659973
+    }
+  ]
+}

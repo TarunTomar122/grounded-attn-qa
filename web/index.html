@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Grounded attention-only reader</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #171717;
+        background: #f7f7f5;
+      }
+
+      * { box-sizing: border-box; }
+
+      body { margin: 0; }
+
+      main {
+        width: min(860px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 56px 0 80px;
+      }
+
+      h1 { margin: 0 0 10px; font-size: clamp(1.8rem, 4vw, 2.5rem); letter-spacing: -0.04em; }
+      p { color: #5b5b5b; line-height: 1.55; }
+      header { margin-bottom: 36px; }
+
+      form { display: grid; gap: 22px; }
+      label { display: grid; gap: 8px; font-weight: 650; }
+      textarea {
+        width: 100%;
+        min-height: 150px;
+        padding: 14px;
+        border: 1px solid #bdbdb8;
+        border-radius: 8px;
+        background: #fff;
+        color: inherit;
+        font: inherit;
+        line-height: 1.5;
+        resize: vertical;
+      }
+
+      textarea:focus, button:focus-visible { outline: 3px solid #777; outline-offset: 2px; }
+      .examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 24px; }
+      button { border: 1px solid #222; border-radius: 999px; padding: 10px 16px; background: #fff; color: #171717; font: inherit; cursor: pointer; }
+      button:hover { background: #ededeb; }
+      button[type="submit"] { justify-self: start; border-radius: 8px; background: #171717; color: #fff; }
+      button[type="submit"]:disabled { opacity: 0.55; cursor: wait; }
+      .status { min-height: 24px; color: #5b5b5b; font-size: 0.95rem; }
+      .result { margin-top: 36px; padding-top: 24px; border-top: 1px solid #d2d2cc; }
+      .result h2 { margin: 0 0 10px; font-size: 1.05rem; }
+      .answer { min-height: 52px; padding: 16px; border-left: 3px solid #171717; background: #fff; white-space: pre-wrap; }
+      .meta { margin-top: 10px; font-size: 0.85rem; color: #777; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Grounded attention-only reader</h1>
+        <p>Ask about the context. This released copy-phase checkpoint is strongest when the answer is present; refusal training comes later.</p>
+        <div class="status" id="status" role="status">Loading checkpoint…</div>
+      </header>
+
+      <div class="examples" aria-label="Examples">
+        <button type="button" data-example="copy">Copy example</button>
+        <button type="button" data-example="refuse">Missing-answer test</button>
+        <button type="button" data-example="city">City example</button>
+      </div>
+
+      <form id="qa-form">
+        <label>
+          Context
+          <textarea id="context" required spellcheck="true"></textarea>
+        </label>
+        <label>
+          Question
+          <textarea id="question" required rows="3" spellcheck="true"></textarea>
+        </label>
+        <button type="submit" id="run">Run model</button>
+      </form>
+
+      <section class="result" aria-live="polite">
+        <h2>Model output</h2>
+        <div class="answer" id="answer">Run an example or enter your own context.</div>
+        <div class="meta" id="meta"></div>
+      </section>
+    </main>
+
+    <script>
+      const examples = {
+        copy: {
+          context: "Jane Diaz is the CEO of Acme Corp. In 2023, Acme Corp reported revenue of $4.2 billion.",
+          question: "Who is the CEO of Acme Corp?"
+        },
+        refuse: {
+          context: "Jane Diaz is the CEO of Acme Corp. Acme Corp reported revenue of $4.2 billion in 2023.",
+          question: "Who is the CEO of Northwind?"
+        },
+        city: {
+          context: "Kyoto is a city in Japan with about 1.46 million people.",
+          question: "Which country is Kyoto in?"
+        }
+      };
+
+      const context = document.querySelector("#context");
+      const question = document.querySelector("#question");
+      const answer = document.querySelector("#answer");
+      const meta = document.querySelector("#meta");
+      const status = document.querySelector("#status");
+      const run = document.querySelector("#run");
+
+      function loadExample(name) {
+        context.value = examples[name].context;
+        question.value = examples[name].question;
+        answer.textContent = "Ready to run.";
+        meta.textContent = "";
+      }
+
+      document.querySelectorAll("[data-example]").forEach((button) => {
+        button.addEventListener("click", () => loadExample(button.dataset.example));
+      });
+
+      document.querySelector("#qa-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        run.disabled = true;
+        answer.textContent = "Running…";
+        meta.textContent = "";
+        try {
+          const response = await fetch("/api/predict", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ context: context.value, question: question.value })
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "Request failed");
+          answer.textContent = data.answer || "(empty output)";
+          meta.textContent = `${data.input_tokens} input tokens · ${data.device}${data.refuse ? " · refusal" : ""}`;
+        } catch (error) {
+          answer.textContent = error.message;
+        } finally {
+          run.disabled = false;
+        }
+      });
+
+      fetch("/api/status")
+        .then((response) => response.json())
+        .then((data) => {
+          status.textContent = `Ready · ${data.device} · ${(data.parameters / 1e6).toFixed(1)}M parameters`;
+        })
+        .catch(() => { status.textContent = "The local model server is unavailable."; });
+
+      loadExample("copy");
+    </script>
+  </body>
+</html>

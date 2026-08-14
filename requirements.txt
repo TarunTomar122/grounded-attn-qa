@@ -1,0 +1,6 @@
+torch>=2.0
+transformers>=4.36
+datasets>=2.14
+tokenizers>=0.15
+pyyaml>=6.0
+wandb>=0.17
