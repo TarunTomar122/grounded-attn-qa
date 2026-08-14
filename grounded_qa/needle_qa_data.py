@@ -175,6 +175,36 @@ def prepare_squad2_item(
     ), None
 
 
+def prepare_squad2_unanswerable(
+    item: dict[str, Any],
+    tokenizer,
+    *,
+    example_index: int,
+    max_source_length: int = 1024,
+) -> tuple[PreparedNeedleQA | None, str | None]:
+    """Encode a real SQuAD2 negative without inventing an answer target."""
+    if any(item.get("answers", {}).get("text", [])):
+        return None, "answerable"
+    query_ids = tokenizer.encode(str(item.get("question", "")))
+    context_ids = tokenizer.encode(str(item.get("context", "")))
+    context_budget = max_source_length - len(query_ids) - 1
+    if context_budget <= 0 or not context_ids:
+        return None, "source_length"
+    context_ids = context_ids[:context_budget]
+    context_start = len(query_ids) + 1
+    return PreparedNeedleQA(
+        source_ids=[*query_ids, TOOLS_ID, *context_ids],
+        target_ids=[EOS_ID],
+        gold_copy_positions=[-1],
+        context_start=context_start,
+        example_index=example_index,
+        turn_index=-1,
+        evidence_start=-1,
+        evidence_end=-1,
+        window_start=0,
+    ), None
+
+
 def coqa_query(history: list[tuple[str, str]], question: str, *, max_history_turns: int = 4) -> str:
     turns = history[-max_history_turns:] if max_history_turns else []
     if not turns:

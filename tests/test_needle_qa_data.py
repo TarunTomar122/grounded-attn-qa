@@ -12,6 +12,7 @@ from grounded_qa.needle_qa_data import (
     immutable_pieces,
     prepare_coqa_turn,
     prepare_squad2_item,
+    prepare_squad2_unanswerable,
     span_piece_indices,
 )
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, TARGET_LENGTH, tensorize
@@ -136,6 +137,19 @@ class NeedleQADataTests(unittest.TestCase):
         )
         self.assertIsNone(example)
         self.assertEqual(reason, "token_boundary_alignment")
+
+    def test_squad_unanswerable_has_no_copy_target(self) -> None:
+        tokenizer = FakeTokenizer()
+        example, reason = prepare_squad2_unanswerable(
+            {"question": "Who signed it?", "context": "The record names no signer.", "answers": {"text": [], "answer_start": []}},
+            tokenizer,
+            example_index=3,
+        )
+        self.assertIsNone(reason)
+        assert example is not None
+        self.assertEqual(example.target_ids, [1])
+        self.assertEqual(example.gold_copy_positions, [-1])
+        self.assertEqual(example.source_ids[example.context_start - 1], 5)
 
     def test_fixed_tensor_contract(self) -> None:
         tokenizer = FakeTokenizer()
