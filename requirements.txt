@@ -4,3 +4,6 @@ datasets>=2.14
 tokenizers>=0.15
 pyyaml>=6.0
 wandb>=0.17
+sentencepiece>=0.2
+safetensors>=0.4
+duckdb>=1.1

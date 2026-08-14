@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
@@ -31,6 +32,8 @@ class NeedleConfig:
     reasoning_id: int = 8194
     answer_id: int = 8195
     dropout: float = 0.0
+    embedding_scale: float = 1.0
+    cross_attention_rope: bool = True
 
     def __post_init__(self) -> None:
         if self.d_model != self.query_heads * self.head_dim:
@@ -40,7 +43,19 @@ class NeedleConfig:
         if self.head_dim % 2:
             raise ValueError("RoPE requires an even head dimension")
 
-    def to_dict(self) -> dict[str, int | float | str]:
+    @classmethod
+    def public_checkpoint(cls) -> "NeedleConfig":
+        """Exact trainable architecture released as Cactus-Compute/needle."""
+        return cls(
+            model_name="cactus_needle_26m",
+            vocab_size=8192,
+            source_length=1024,
+            target_length=512,
+            embedding_scale=math.sqrt(512),
+            cross_attention_rope=False,
+        )
+
+    def to_dict(self) -> dict[str, int | float | str | bool]:
         return asdict(self)
 
 
@@ -102,14 +117,18 @@ class GroupedQueryAttention(nn.Module):
         query_positions: torch.Tensor,
         key_positions: torch.Tensor,
         causal: bool | None = None,
+        use_rope: bool = True,
     ) -> torch.Tensor:
         batch, query_length, _ = query.shape
         key_length = key_value.shape[1]
         q = self.q_proj(query).view(batch, query_length, self.query_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(key_value).view(batch, key_length, self.kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(key_value).view(batch, key_length, self.kv_heads, self.head_dim).transpose(1, 2)
-        q = self.rope(self.q_norm(q), query_positions)
-        k = self.rope(self.k_norm(k), key_positions)
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+        if use_rope:
+            q = self.rope(q, query_positions)
+            k = self.rope(k, key_positions)
         if self.query_heads != self.kv_heads:
             repeats = self.query_heads // self.kv_heads
             k = k.repeat_interleave(repeats, dim=1)
@@ -137,7 +156,8 @@ class EncoderBlock(nn.Module):
         self.attn_gate = nn.Parameter(torch.zeros(1))
 
     def forward(self, x: torch.Tensor, valid: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
-        update = self.self_attn(self.input_layernorm(x), x, key_valid=valid, query_positions=positions, key_positions=positions)
+        normalized = self.input_layernorm(x)
+        update = self.self_attn(normalized, normalized, key_valid=valid, query_positions=positions, key_positions=positions)
         return x + torch.sigmoid(self.attn_gate) * update
 
 
@@ -150,6 +170,7 @@ class DecoderBlock(nn.Module):
         self.encoder_attn_layer_norm = ZCRMSNorm(cfg.d_model, cfg.rmsnorm_eps)
         self.encoder_attn = GroupedQueryAttention(cfg)
         self.cross_attn_gate = nn.Parameter(torch.zeros(1))
+        self.cross_attention_rope = cfg.cross_attention_rope
 
     def forward(
         self,
@@ -160,9 +181,10 @@ class DecoderBlock(nn.Module):
         target_positions: torch.Tensor,
         source_positions: torch.Tensor,
     ) -> torch.Tensor:
+        normalized = self.input_layernorm(x)
         update = self.self_attn(
-            self.input_layernorm(x),
-            x,
+            normalized,
+            normalized,
             key_valid=target_valid,
             query_positions=target_positions,
             key_positions=target_positions,
@@ -175,6 +197,7 @@ class DecoderBlock(nn.Module):
             query_positions=target_positions,
             key_positions=source_positions,
             causal=False,
+            use_rope=self.cross_attention_rope,
         )
         return x + torch.sigmoid(self.cross_attn_gate) * update
 
@@ -197,12 +220,12 @@ class NeedleishModel(nn.Module):
 
     def encode(self, source_ids: torch.Tensor, source_valid: torch.Tensor) -> torch.Tensor:
         positions = torch.arange(source_ids.shape[1], device=source_ids.device)
-        x = self.token_embedding(source_ids)
+        x = self.token_embedding(source_ids) * self.cfg.embedding_scale
         for block in self.encoder:
             x = block(x, source_valid, positions)
         return self.encoder_final_norm(x)
 
-    def decode(
+    def decode_hidden(
         self,
         decoder_input_ids: torch.Tensor,
         memory: torch.Tensor,
@@ -211,10 +234,19 @@ class NeedleishModel(nn.Module):
     ) -> torch.Tensor:
         source_positions = torch.arange(memory.shape[1], device=memory.device)
         target_positions = torch.arange(decoder_input_ids.shape[1], device=memory.device)
-        x = self.token_embedding(decoder_input_ids)
+        x = self.token_embedding(decoder_input_ids) * self.cfg.embedding_scale
         for block in self.decoder:
             x = block(x, memory, target_valid, source_valid, target_positions, source_positions)
-        hidden = self.decoder_final_norm(x)
+        return self.decoder_final_norm(x)
+
+    def decode(
+        self,
+        decoder_input_ids: torch.Tensor,
+        memory: torch.Tensor,
+        source_valid: torch.Tensor,
+        target_valid: torch.Tensor,
+    ) -> torch.Tensor:
+        hidden = self.decode_hidden(decoder_input_ids, memory, source_valid, target_valid)
         return F.linear(hidden, self.token_embedding.weight)
 
     def forward(
@@ -245,3 +277,38 @@ class NeedleishModel(nn.Module):
             "attention/q_norm": 1.0,
             "attention/k_norm": 1.0,
         }
+
+
+def load_public_checkpoint(model: NeedleishModel, path: str | Path) -> None:
+    """Load the pinned Hugging Face safetensors release into NeedleishModel."""
+    from safetensors.torch import load_file
+
+    if model.cfg != NeedleConfig.public_checkpoint():
+        raise ValueError("Public Needle weights require NeedleConfig.public_checkpoint()")
+
+    released = load_file(str(path), device="cpu")
+    mapped: dict[str, torch.Tensor] = {}
+    for name, value in released.items():
+        if name == "lm_head.weight":  # Exact duplicate of the tied embedding.
+            continue
+        if name == "model.embed_tokens.weight":
+            target = "token_embedding.weight"
+        elif name == "model.encoder.final_norm.weight":
+            target = "encoder_final_norm.scale"
+        elif name == "model.decoder.norm.weight":
+            target = "decoder_final_norm.scale"
+        elif name.startswith("model.encoder.layers."):
+            target = name.removeprefix("model.encoder.layers.")
+            target = f"encoder.{target}"
+        elif name.startswith("model.decoder.layers."):
+            target = name.removeprefix("model.decoder.layers.")
+            target = f"decoder.{target}"
+        else:
+            raise ValueError(f"Unknown public Needle tensor: {name}")
+        if target.endswith("_norm.weight") or target.endswith("layernorm.weight"):
+            target = target.removesuffix("weight") + "scale"
+        mapped[target] = value
+
+    missing, unexpected = model.load_state_dict(mapped, strict=False)
+    if missing or unexpected:
+        raise ValueError(f"Checkpoint mapping mismatch: missing={missing}, unexpected={unexpected}")

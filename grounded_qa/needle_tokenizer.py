@@ -12,19 +12,27 @@ SPECIAL_TOKENS = {
     "<ANSWER>": 8195,
 }
 
+PAD_ID = 0
+EOS_ID = 1
+BOS_ID = 2
+UNK_ID = 3
+TOOL_CALL_ID = 4
+TOOLS_ID = 5
+
 
 class NeedleTokenizer:
     """SentencePiece tokenizer with four appended atomic training markers."""
 
-    def __init__(self, model_path: str | Path):
+    def __init__(self, model_path: str | Path, *, append_markers: bool = True):
         self.path = Path(model_path)
+        self.append_markers = append_markers
         self.sp = spm.SentencePieceProcessor(model_file=str(self.path))
         if self.sp.vocab_size() != 8192:
             raise ValueError(f"Needle tokenizer must have 8192 base pieces, got {self.sp.vocab_size()}")
 
     @property
     def vocab_size(self) -> int:
-        return 8192 + len(SPECIAL_TOKENS)
+        return 8192 + (len(SPECIAL_TOKENS) if self.append_markers else 0)
 
     def encode(self, text: str) -> list[int]:
         return list(self.sp.encode(text, out_type=int))
@@ -46,6 +54,8 @@ class NeedleTokenizer:
         return "".join(pieces)
 
     def encode_source(self, query: str, context: str) -> list[int]:
+        if not self.append_markers:
+            return [*self.encode(query), TOOLS_ID, *self.encode(context)]
         return [SPECIAL_TOKENS["<QUERY>"], *self.encode(query), SPECIAL_TOKENS["<CONTEXT>"], *self.encode(context)]
 
     def encode_target(self, reasoning: str, answer: str, eos_id: int = 1) -> tuple[list[int], dict[str, int]]:

@@ -1,5 +1,11 @@
 # Grounded attention-only pointer-generator
 
+> **Current program (2026-08-14):** adapt the released pretrained Needle 26M
+> checkpoint into a grounded RAG model, then compare matched generative and
+> pointer/provenance variants. The measured audit and live decisions are in
+> [NEEDLE_RAG_LOG.md](NEEDLE_RAG_LOG.md). The scratch-pretraining material below
+> is retained as experiment history.
+
 This repository is the fresh redo of the grounded QA experiment. The canonical
 protocol is in [EXPERIMENT_PLAN.md](EXPERIMENT_PLAN.md). The model is an
 approximately 23.21M parameter encoder-decoder with no Transformer FFNs, RoPE,

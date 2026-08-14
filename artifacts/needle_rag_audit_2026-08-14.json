@@ -1,0 +1,34 @@
+{
+  "public_checkpoint": {
+    "repository": "Cactus-Compute/needle",
+    "revision": "5f89b4307696d669c3df1d38ae057e6e1728b107",
+    "historical_code_revision": "a5af1f8282c3aa56d6fbfde77648146114ad31fa",
+    "language_model_parameters": 26233372,
+    "safetensors_sha256": "c5f9a3016e4537e492c362da5cb8ba05107d8595bec0d5ea5d8a65801db46531",
+    "pickle_sha256": "40a32e91d1d4197bf15ba559b74f6727c342dc8746918742fc7d8e2c1f18df40",
+    "tokenizer_sha256": "0823f5b9133c68a8140addc5d7a425fa9119c4c8cb4a550363b4bffa4ba1c8c7",
+    "jax_torch_bf16_parity": {
+      "encoder_max_abs": 0.09375,
+      "encoder_mean_abs": 0.008143399842083454,
+      "logits_max_abs": 0.22656822204589844,
+      "logits_mean_abs": 0.03937654569745064,
+      "matching_top_ids": 9
+    },
+    "raw_qa_probe": {
+      "examples": 5,
+      "unique_outputs": ["<tool_call> []</s>"],
+      "eos_rate": 1.0
+    }
+  },
+  "synth": {
+    "repository": "PleIAs/SYNTH",
+    "revision": "0d6813a2966662c39f22f0b9af28a0c1c9f7a437",
+    "parquet_shards": 500,
+    "parquet_bytes": 236335243511,
+    "rows": 77908583,
+    "rag_rows": 796582,
+    "rag_words": 595812155,
+    "rag_by_language": {"en": 796582},
+    "scan_seconds": 153.0580883026123
+  }
+}

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import torch
 
-from grounded_qa.needle_tokenizer import NeedleTokenizer, SPECIAL_TOKENS
-from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, NeedleishModel, ZCRMSNorm
+from grounded_qa.needle_tokenizer import SPECIAL_TOKENS
+from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, NeedleishModel
 from grounded_qa.synth_data import encode_synth_row, source_bucket, split_for_source
 
 
@@ -31,6 +31,15 @@ def test_model_is_ffn_free_and_tied() -> None:
     assert not any(name.endswith("lm_head.weight") for name, _ in model.named_parameters())
     assert all(not isinstance(module, torch.nn.Linear) or module.out_features != 4 * tiny_config().d_model for module in model.modules())
     assert all(hasattr(module, "q_norm") and hasattr(module, "k_norm") for module in model.modules() if isinstance(module, GroupedQueryAttention))
+
+
+def test_public_checkpoint_configuration_is_exact() -> None:
+    cfg = NeedleConfig.public_checkpoint()
+    model = NeedleishModel(cfg)
+    assert (cfg.vocab_size, cfg.source_length, cfg.target_length) == (8192, 1024, 512)
+    assert cfg.embedding_scale == 512**0.5
+    assert not cfg.cross_attention_rope
+    assert model.n_params() == 26_233_372
 
 
 def test_forward_is_finite_and_has_vocab_projection() -> None:
