@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-from scripts.train_needle_n1 import Muon, losses, optimizers_for
+from scripts.train_needle_n1 import Muon, load_initial_checkpoint, losses, optimizers_for
 
 
 def test_boundary_token_weights_match_weighted_cross_entropy() -> None:
@@ -27,3 +27,14 @@ def test_muon_updates_only_dense_weights() -> None:
         optimizer.step()
     assert torch.isfinite(dense).all() and not torch.equal(before, dense)
     assert isinstance(optimizers["muon"], Muon)
+
+
+def test_adapted_checkpoint_can_initialize_the_next_stage(tmp_path) -> None:
+    source = torch.nn.Linear(3, 2, bias=False)
+    checkpoint = tmp_path / "adapted.pt"
+    torch.save({"model": source.state_dict()}, checkpoint)
+    target = torch.nn.Linear(3, 2, bias=False)
+
+    load_initial_checkpoint(target, checkpoint, torch.device("cpu"))
+
+    torch.testing.assert_close(target.weight, source.weight)

@@ -67,6 +67,13 @@ def optimizers_for(model: nn.Module, adam_lr: float, muon_lr: float) -> dict[str
     }
 
 
+def load_initial_checkpoint(model: nn.Module, path: Path, device: torch.device) -> None:
+    if path.suffix == ".safetensors":
+        load_public_checkpoint(model, path)
+    else:
+        model.load_state_dict(torch.load(path, map_location=device, weights_only=False)["model"])
+
+
 def load_split(data_dir: Path, split: str) -> dict[str, torch.Tensor]:
     files = sorted(data_dir.glob(f"*-{split}.pt"))
     if not files:
@@ -247,7 +254,7 @@ def main() -> None:
     train = load_split(args.data_dir, "train")
     validation = load_split(args.data_dir, "validation")
     eager = NeedleishModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=torch.bfloat16)
-    load_public_checkpoint(eager, args.checkpoint)
+    load_initial_checkpoint(eager, args.checkpoint, device)
     model = torch.compile(eager) if args.compile else eager
     optimizers = optimizers_for(eager, args.lr, args.muon_lr)
     if args.weight_decay:
