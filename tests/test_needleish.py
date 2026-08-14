@@ -9,7 +9,7 @@ from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, Needleish
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
 from grounded_qa.synth_data import encode_synth_row, source_bucket, split_for_source
 from scripts.evaluate_public_needle import generate_batch
-from scripts.train_needle_n2_pointer import swap_contexts
+from scripts.train_needle_n2_pointer import calibrate_answerability, swap_contexts
 
 
 def tiny_config() -> NeedleConfig:
@@ -219,3 +219,13 @@ def test_wrong_context_swap_preserves_questions() -> None:
     assert torch.equal(wrong.ne(0), wrong_valid)
     with pytest.raises(ValueError, match="at least two"):
         swap_contexts(source[:1], valid[:1], context[:1])
+
+
+def test_answerability_calibration_separates_classes() -> None:
+    metrics = calibrate_answerability(
+        torch.tensor([0.9, 0.8, 0.2, 0.1]),
+        torch.tensor([True, True, False, False]),
+    )
+    assert metrics["answerability_f1"] == 1
+    assert metrics["refusal_f1"] == 1
+    assert 0.2 < metrics["threshold"] <= 0.8

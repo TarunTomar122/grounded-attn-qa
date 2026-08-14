@@ -70,9 +70,34 @@ def load_start(model: NeedlePointerModel | NeedleAnswerablePointerModel, path: P
     model.load_backbone_state_dict(state)
 
 
+def calibrate_answerability(probabilities: torch.Tensor, answerable: torch.Tensor, steps: int = 201) -> dict[str, float]:
+    """Choose the validation threshold maximizing mean answer/refusal F1."""
+    thresholds = torch.linspace(0, 1, steps)
+    predicted = probabilities[:, None] >= thresholds[None]
+    labels = answerable[:, None]
+    tp = (predicted & labels).sum(dim=0).float()
+    tn = (~predicted & ~labels).sum(dim=0).float()
+    fp = (predicted & ~labels).sum(dim=0).float()
+    fn = (~predicted & labels).sum(dim=0).float()
+    answer_f1 = 2 * tp / (2 * tp + fp + fn).clamp_min(1)
+    refusal_f1 = 2 * tn / (2 * tn + fp + fn).clamp_min(1)
+    index = int(((answer_f1 + refusal_f1) / 2).argmax())
+    return {
+        "threshold": float(thresholds[index]),
+        "answerability_f1": float(answer_f1[index]),
+        "refusal_precision": float(tn[index] / (tn[index] + fn[index]).clamp_min(1)),
+        "refusal_recall": float(tn[index] / (tn[index] + fp[index]).clamp_min(1)),
+        "refusal_f1": float(refusal_f1[index]),
+        "false_refusal_rate": float(fn[index] / (tp[index] + fn[index]).clamp_min(1)),
+        "hallucinated_answer_rate": float(fp[index] / (tn[index] + fp[index]).clamp_min(1)),
+    }
+
+
 @torch.inference_mode()
 def evaluate(model, data, device, args) -> dict[str, float]:
     model.eval()
+    all_probabilities: list[torch.Tensor] = []
+    all_answerable: list[torch.Tensor] = []
     totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "gold_pointer_probability", "p_gen", "wrong_sequence", "wrong_weighted", "answerability_bce", "tp", "tn", "fp", "fn", "positive_probability", "negative_probability", "wrong_probability", "wrong_rows")}
     for start in range(0, len(data["source_ids"]), args.batch_size):
         indices = torch.arange(start, min(start + args.batch_size, len(data["source_ids"])))
@@ -114,6 +139,8 @@ def evaluate(model, data, device, args) -> dict[str, float]:
             totals["wrong_weighted"] += weighted
         if output.answerability_logits is not None:
             probability = output.answerability_logits.sigmoid()
+            all_probabilities.append(probability.cpu())
+            all_answerable.append(answerable.cpu())
             predicted = probability >= 0.5
             totals["answerability_bce"] += float(F.binary_cross_entropy_with_logits(output.answerability_logits, answerable.float(), reduction="sum"))
             totals["tp"] += int((predicted & answerable).sum())
@@ -164,11 +191,13 @@ def evaluate(model, data, device, args) -> dict[str, float]:
             "val/mean_unanswerable_probability": totals["negative_probability"] / max(negatives, 1),
             "val/wrong_context_answerable_probability": totals["wrong_probability"] / max(totals["wrong_rows"], 1),
         })
+        calibrated = calibrate_answerability(torch.cat(all_probabilities), torch.cat(all_answerable))
+        metrics.update({f"val/calibrated_{key}": value for key, value in calibrated.items()})
     return metrics
 
 
 @torch.inference_mode()
-def probe(model: NeedlePointerModel, tokenizer: NeedleTokenizer, data, device, count: int = 8) -> tuple[dict[str, float], list[dict]]:
+def probe(model: NeedlePointerModel, tokenizer: NeedleTokenizer, data, device, count: int = 8, threshold: float = 0.5) -> tuple[dict[str, float], list[dict]]:
     model.eval()
     labels = data.get("answerable")
     if labels is None:
@@ -179,7 +208,7 @@ def probe(model: NeedlePointerModel, tokenizer: NeedleTokenizer, data, device, c
     source, source_valid, context_mask, _, target, _, _, answerable = batch(data, indices, device)
     memory = model.encode(source, source_valid)
     probabilities = model.classify_answerability(memory, source_valid, context_mask).sigmoid() if isinstance(model, NeedleAnswerablePointerModel) else torch.ones(len(indices), device=device)
-    answered = probabilities >= 0.5
+    answered = probabilities >= threshold
     decoder = torch.full((len(indices), 1), EOS_ID, dtype=torch.long, device=device)
     finished = torch.zeros(len(indices), dtype=torch.bool, device=device)
     for _ in range(128):
@@ -219,6 +248,7 @@ def probe(model: NeedlePointerModel, tokenizer: NeedleTokenizer, data, device, c
         "probe/refusal_f1": 2 * refusal_precision * refusal_recall / max(refusal_precision + refusal_recall, 1e-8),
         "probe/false_refusal_rate": false_refusals / max(len(answerable_rows), 1),
         "probe/hallucinated_answer_rate": sum(not row["refused"] for row in negative_rows) / max(len(negative_rows), 1),
+        "probe/answerability_threshold": threshold,
     }, rows
 
 
@@ -283,7 +313,7 @@ def main() -> None:
     load_start(eager, args.checkpoint, device)
     if args.evaluate_only:
         metrics = evaluate(eager, validation, device, args)
-        probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device)
+        probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device, threshold=metrics.get("val/calibrated_threshold", 0.5))
         print(json.dumps({**metrics, **probe_metrics, "examples": probe_rows[:2]}, ensure_ascii=False))
         return
     optimizers = optimizers_for(eager, args.lr, args.muon_lr)
@@ -308,7 +338,7 @@ def main() -> None:
         run = wandb.init(project="grounded-attn-qa", group="needle-rag", name=args.run_name, config={**config, "train_rows": len(train["source_ids"]), "validation_rows": len(validation["source_ids"]), "total_steps": total_steps})
 
     initial = evaluate(model, validation, device, args)
-    probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device)
+    probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device, threshold=initial.get("val/calibrated_threshold", 0.5))
     print(json.dumps({"step": step, **initial, **probe_metrics, "examples": probe_rows[:2]}, ensure_ascii=False), flush=True)
     if run:
         run.log({**initial, **probe_metrics}, step=step)
@@ -362,7 +392,7 @@ def main() -> None:
             last_log, last_step, last_tokens = now, step, seen_tokens
         if step % args.eval_every == 0 or step == total_steps:
             metrics = evaluate(model, validation, device, args)
-            probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device)
+            probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device, threshold=metrics.get("val/calibrated_threshold", 0.5))
             print(json.dumps({"step": step, **metrics, **probe_metrics, "examples": probe_rows[:2]}, ensure_ascii=False), flush=True)
             if run:
                 run.log({**metrics, **probe_metrics}, step=step)
