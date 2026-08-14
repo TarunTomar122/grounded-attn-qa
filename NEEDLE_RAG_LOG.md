@@ -153,3 +153,21 @@ answer token and EOS. At step 250, the controlled boundary-weight pilot used
 W&B run: `50fnkq71`. The EOS intervention worked, and the model no longer emits
 512-token loops. The five-row validation is deliberately treated only as an
 overfit diagnostic; full-corpus validation decides whether N1 proceeds.
+
+The subsequent 1,000-step gate isolated the optimizer as the remaining cause.
+AdamW at `3e-4` for every parameter stalled at 34.4% train token accuracy.
+Needle's original split recipe—Muon at `0.02` for dense projections and AdamW
+at `3e-5` for embeddings, norms, and gates—fit the same 394 rows nearly exactly:
+
+| Step | Train token accuracy | Train first token | Train EOS | Validation token F1 |
+|---:|---:|---:|---:|---:|
+| 250 | 83.5% | 100% | 100% | 32.6% |
+| 500 | 99.2% | 100% | 100% | 34.1% |
+| 1,000 | 99.96% | 100% | 100% | 30.6% |
+
+The five unseen validation rows overfit after the early peak, as expected from
+about 60 passes over a 394-row corpus. The result establishes that the faithful
+optimizer can fit free-running answer boundaries and content; full N1 will use
+the broad unique corpus and validation-based checkpoint selection. The compiled
+Muon loop sustained about 190k actual / 303k padded tokens/s at 6.42 GB allocated
+VRAM. W&B run: `7q4tq5b3`.

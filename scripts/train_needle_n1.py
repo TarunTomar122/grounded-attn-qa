@@ -10,10 +10,61 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+from torch import nn
 
 from grounded_qa.metrics import exact_match, token_f1
 from grounded_qa.needle_tokenizer import EOS_ID, NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig, NeedleishModel, load_public_checkpoint
+
+
+def newton_schulz(gradient: torch.Tensor, steps: int = 5) -> torch.Tensor:
+    """Needle's Newton-Schulz polar approximation for a 2D dense gradient."""
+    a, b, c = 3.4445, -4.7750, 2.0315
+    dtype = gradient.dtype
+    x = gradient.float() / (gradient.float().norm() + 1.0e-7)
+    transposed = x.shape[0] > x.shape[1]
+    if transposed:
+        x = x.T
+    for _ in range(steps):
+        gram = x @ x.T
+        x = a * x + (b * gram + c * gram @ gram) @ x
+    return x.T.to(dtype) if transposed else x.to(dtype)
+
+
+class Muon(torch.optim.Optimizer):
+    """Minimal PyTorch equivalent of Needle's dense-kernel Muon transform."""
+
+    def __init__(self, params, lr: float, momentum: float = 0.95, weight_decay: float = 0.01):
+        super().__init__(params, {"lr": lr, "momentum": momentum, "weight_decay": weight_decay})
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = closure() if closure else None
+        for group in self.param_groups:
+            for parameter in group["params"]:
+                if parameter.grad is None:
+                    continue
+                if parameter.grad.ndim != 2:
+                    raise ValueError("Muon only supports 2D dense weights")
+                update = newton_schulz(parameter.grad)
+                momentum = self.state[parameter].setdefault("momentum_buffer", torch.zeros_like(update))
+                momentum.mul_(group["momentum"]).add_(update)
+                update.add_(momentum, alpha=group["momentum"])
+                update.add_(parameter, alpha=group["weight_decay"])
+                parameter.add_(update, alpha=-group["lr"])
+        return loss
+
+
+def optimizers_for(model: nn.Module, adam_lr: float, muon_lr: float) -> dict[str, torch.optim.Optimizer]:
+    if not muon_lr:
+        return {"adam": torch.optim.AdamW(model.parameters(), lr=adam_lr, betas=(0.9, 0.95), weight_decay=0.0)}
+    dense_ids = {id(module.weight) for module in model.modules() if isinstance(module, nn.Linear)}
+    dense = [parameter for parameter in model.parameters() if id(parameter) in dense_ids]
+    other = [parameter for parameter in model.parameters() if id(parameter) not in dense_ids]
+    return {
+        "adam": torch.optim.AdamW(other, lr=adam_lr, betas=(0.9, 0.95), weight_decay=0.0),
+        "muon": Muon(dense, lr=muon_lr),
+    }
 
 
 def load_split(data_dir: Path, split: str) -> dict[str, torch.Tensor]:
@@ -149,12 +200,12 @@ def probe(model: NeedleishModel, tokenizer: NeedleTokenizer, data: dict[str, tor
     }, rows
 
 
-def save_checkpoint(path: Path, model, optimizer, step: int, seen_tokens: int, epoch: int, offset: int, args: argparse.Namespace) -> None:
+def save_checkpoint(path: Path, model, optimizers: dict[str, torch.optim.Optimizer], step: int, seen_tokens: int, epoch: int, offset: int, args: argparse.Namespace) -> None:
     eager = getattr(model, "_orig_mod", model)
     commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False).stdout.strip()
     torch.save({
         "model": eager.state_dict(),
-        "optimizer": optimizer.state_dict(),
+        "optimizers": {name: optimizer.state_dict() for name, optimizer in optimizers.items()},
         "step": step,
         "seen_tokens": seen_tokens,
         "epoch": epoch,
@@ -175,6 +226,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--muon-lr", type=float, default=0.0)
     parser.add_argument("--z-loss", type=float, default=1e-4)
     parser.add_argument("--first-token-weight", type=float, default=20.0)
     parser.add_argument("--eos-token-weight", type=float, default=1.0)
@@ -197,7 +249,10 @@ def main() -> None:
     eager = NeedleishModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=torch.bfloat16)
     load_public_checkpoint(eager, args.checkpoint)
     model = torch.compile(eager) if args.compile else eager
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.95), weight_decay=args.weight_decay)
+    optimizers = optimizers_for(eager, args.lr, args.muon_lr)
+    if args.weight_decay:
+        for group in optimizers["adam"].param_groups:
+            group["weight_decay"] = args.weight_decay
     step = 0
     seen_tokens = 0
     epoch = 0
@@ -205,7 +260,9 @@ def main() -> None:
     if args.resume:
         state = torch.load(args.resume, map_location=device, weights_only=False)
         eager.load_state_dict(state["model"])
-        optimizer.load_state_dict(state["optimizer"])
+        optimizer_states = state["optimizers"] if "optimizers" in state else {"adam": state["optimizer"]}
+        for name, optimizer_state in optimizer_states.items():
+            optimizers[name].load_state_dict(optimizer_state)
         step = state["step"]
         seen_tokens = state.get("seen_tokens", 0)
         epoch = state.get("epoch", 0)
@@ -221,7 +278,7 @@ def main() -> None:
     if args.wandb:
         import wandb
         config = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
-        run = wandb.init(project="grounded-attn-qa", group="needle-rag", name=f"needle26m-n1-lr{args.lr:g}-first{args.first_token_weight:g}-eos{args.eos_token_weight:g}", config={**config, "train_rows": len(train["source_ids"]), "validation_rows": len(validation["source_ids"]), "total_steps": total_steps})
+        run = wandb.init(project="grounded-attn-qa", group="needle-rag", name=f"needle26m-n1-adam{args.lr:g}-muon{args.muon_lr:g}-first{args.first_token_weight:g}-eos{args.eos_token_weight:g}", config={**config, "train_rows": len(train["source_ids"]), "validation_rows": len(validation["source_ids"]), "total_steps": total_steps})
 
     initial = evaluate(model, validation, device, args.batch_size, args.z_loss, args.first_token_weight, args.eos_token_weight)
     probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device)
@@ -240,15 +297,21 @@ def main() -> None:
                 break
             indices = order[start : start + args.batch_size]
             source, source_valid, decoder, target, valid = batch(train, indices, device)
-            lr = lr_at(step, total_steps, args.lr)
-            for group in optimizer.param_groups:
-                group["lr"] = lr
-            optimizer.zero_grad(set_to_none=True)
+            adam_lr = lr_at(step, total_steps, args.lr)
+            muon_lr = lr_at(step, total_steps, args.muon_lr)
+            for group in optimizers["adam"].param_groups:
+                group["lr"] = adam_lr
+            if "muon" in optimizers:
+                for group in optimizers["muon"].param_groups:
+                    group["lr"] = muon_lr
+            for optimizer in optimizers.values():
+                optimizer.zero_grad(set_to_none=True)
             logits = model(source, source_valid, decoder, valid)
             loss, ce, z, accuracy, first_ce, first_accuracy, eos_accuracy = losses(logits, target, valid, args.z_loss, args.first_token_weight, args.eos_token_weight)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            for optimizer in optimizers.values():
+                optimizer.step()
             step += 1
             offset = start + args.batch_size
             seen_tokens += int(source_valid.sum() + valid.sum())
@@ -264,7 +327,8 @@ def main() -> None:
                     "train/first_token_accuracy": float(first_accuracy.detach()),
                     "train/eos_accuracy": float(eos_accuracy.detach()),
                     "train/grad_norm": float(grad_norm),
-                    "train/lr": lr,
+                    "train/adam_lr": adam_lr,
+                    "train/muon_lr": muon_lr,
                     "system/actual_tokens_per_second": (seen_tokens - last_log_tokens) / max(interval, 1e-6),
                     "system/padded_tokens_per_second": ((step - last_log_step) * args.batch_size * 1536) / max(interval, 1e-6),
                     "system/run_seconds": elapsed,
@@ -287,7 +351,7 @@ def main() -> None:
                 last_log_step = step
                 last_log_tokens = seen_tokens
             if step % args.checkpoint_every == 0 or step == total_steps:
-                save_checkpoint(args.output_dir / f"step-{step:06d}.pt", model, optimizer, step, seen_tokens, epoch, offset, args)
+                save_checkpoint(args.output_dir / f"step-{step:06d}.pt", model, optimizers, step, seen_tokens, epoch, offset, args)
         epoch += 1
         offset = 0
     if run:
