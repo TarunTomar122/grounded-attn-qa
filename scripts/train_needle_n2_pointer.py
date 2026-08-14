@@ -46,7 +46,7 @@ def load_start(model: NeedlePointerModel, path: Path, device: torch.device) -> N
 @torch.inference_mode()
 def evaluate(model, data, device, args) -> dict[str, float]:
     model.eval()
-    totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "p_gen", "wrong_sequence")}
+    totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "gold_pointer_probability", "p_gen", "wrong_sequence")}
     for start in range(0, len(data["source_ids"]), args.batch_size):
         indices = torch.arange(start, min(start + args.batch_size, len(data["source_ids"])))
         source, source_valid, context_mask, decoder, target, valid, gold = batch(data, indices, device)
@@ -86,6 +86,7 @@ def evaluate(model, data, device, args) -> dict[str, float]:
         totals["z"] += float(loss.z) * tokens
         totals["pointer"] += float(loss.pointer_position) * copy_tokens
         totals["pointer_correct"] += float(loss.pointer_accuracy) * copy_tokens
+        totals["gold_pointer_probability"] += float(loss.mean_gold_pointer_probability) * copy_tokens
         totals["p_gen"] += float(loss.mean_p_gen) * tokens
         totals["wrong_sequence"] += float(wrong_loss.sequence) * weighted
     model.train()
@@ -99,6 +100,7 @@ def evaluate(model, data, device, args) -> dict[str, float]:
         "val/z": z,
         "val/pointer_position_nll": pointer,
         "val/pointer_position_accuracy": totals["pointer_correct"] / max(totals["copy_tokens"], 1),
+        "val/mean_gold_pointer_probability": totals["gold_pointer_probability"] / max(totals["copy_tokens"], 1),
         "val/mean_p_gen": totals["p_gen"] / max(totals["tokens"], 1),
         "val/wrong_context_sequence_nll": wrong,
         "val/context_dependency_gap": wrong - sequence,
@@ -177,6 +179,7 @@ def main() -> None:
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--run-name", default="needle26m-n2-pg")
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--evaluate-only", action="store_true")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -187,6 +190,11 @@ def main() -> None:
     train, validation = load_split(args.data_dir, "train"), load_split(args.data_dir, "validation")
     eager = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=torch.bfloat16)
     load_start(eager, args.checkpoint, device)
+    if args.evaluate_only:
+        metrics = evaluate(eager, validation, device, args)
+        probe_metrics, probe_rows = probe(eager, NeedleTokenizer(args.tokenizer, append_markers=False), validation, device)
+        print(json.dumps({**metrics, **probe_metrics, "examples": probe_rows[:2]}, ensure_ascii=False))
+        return
     optimizers = optimizers_for(eager, args.lr, args.muon_lr)
     step = seen_tokens = 0
     if args.resume:
@@ -242,6 +250,7 @@ def main() -> None:
                 "train/sequence_nll": float(loss.sequence.detach()),
                 "train/pointer_position_nll": float(loss.pointer_position.detach()),
                 "train/pointer_position_accuracy": float(loss.pointer_accuracy.detach()),
+                "train/mean_gold_pointer_probability": float(loss.mean_gold_pointer_probability.detach()),
                 "train/mean_p_gen": float(loss.mean_p_gen.detach()),
                 "train/grad_norm": float(grad_norm),
                 "train/adam_lr": adam_lr,

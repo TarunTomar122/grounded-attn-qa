@@ -84,6 +84,7 @@ class NeedlePointerLoss:
     z: torch.Tensor
     pointer_position: torch.Tensor
     pointer_accuracy: torch.Tensor
+    mean_gold_pointer_probability: torch.Tensor
     mean_p_gen: torch.Tensor
 
 
@@ -120,6 +121,7 @@ def pointer_loss(
     pointer_accuracy = (
         output.copy_position_probs.argmax(dim=-1).eq(gold_copy_positions) & supervised
     ).sum() / supervised.sum().clamp_min(1)
+    mean_gold_pointer_probability = (supervised_prob * supervised).sum() / supervised.sum().clamp_min(1)
     mean_p_gen = (output.p_gen * target_valid).sum() / target_valid.sum().clamp_min(1)
     return NeedlePointerLoss(
         sequence + z_weight * z + pointer_weight * pointer_position,
@@ -127,5 +129,6 @@ def pointer_loss(
         z,
         pointer_position,
         pointer_accuracy,
+        mean_gold_pointer_probability,
         mean_p_gen,
     )

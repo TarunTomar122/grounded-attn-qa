@@ -82,6 +82,7 @@ def test_needle_pointer_position_loss_selects_the_annotated_duplicate() -> None:
     )
 
     assert annotated.pointer_position < duplicate.pointer_position
+    assert annotated.mean_gold_pointer_probability > duplicate.mean_gold_pointer_probability
 
 
 def test_synth_rag_evidence_context_keeps_cited_source() -> None:
