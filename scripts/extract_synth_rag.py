@@ -26,16 +26,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Extract only English SYNTH RAG rows.")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--threads", type=int, default=16)
+    parser.add_argument("--start-shard", type=int, default=0)
     parser.add_argument("--limit-shards", type=int)
     args = parser.parse_args()
 
     revision, files = dataset_files(REVISION)
+    files = files[args.start_shard :]
+    if args.limit_shards:
+        files = files[: args.limit_shards]
     urls = [
         f"https://huggingface.co/datasets/{REPO}/resolve/{revision}/{item['path']}"
         for item in files
     ]
-    if args.limit_shards:
-        urls = urls[: args.limit_shards]
+    if not urls:
+        parser.error("selected shard range is empty")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     db = duckdb.connect()
     db.execute(f"SET threads={args.threads}")
@@ -57,6 +61,8 @@ def main() -> None:
         "dataset": REPO,
         "revision": revision,
         "filter": "exercise = 'rag' AND language = 'en'",
+        "start_shard": args.start_shard,
+        "source_shards": len(urls),
         "rows": rows,
         "columns": [
             "synth_id",

@@ -1,0 +1,22 @@
+{
+  "gpu": "NVIDIA GeForce RTX 4090",
+  "pytorch": "2.8.0+cu128",
+  "precision": "bfloat16",
+  "source_length": 1024,
+  "target_length": 512,
+  "sdpa": true,
+  "eager": [
+    {"batch_size": 8, "tokens_per_second": 241328.23, "peak_vram_gb": 3.56098},
+    {"batch_size": 12, "tokens_per_second": 242347.24, "peak_vram_gb": 5.30364},
+    {"batch_size": 16, "tokens_per_second": 235424.42, "peak_vram_gb": 7.04447},
+    {"batch_size": 24, "tokens_per_second": 212807.87, "peak_vram_gb": 10.52797},
+    {"batch_size": 32, "tokens_per_second": 198832.07, "peak_vram_gb": 14.01147}
+  ],
+  "compiled": [
+    {"batch_size": 12, "tokens_per_second": 446824.49, "peak_vram_gb": 3.28033},
+    {"batch_size": 16, "tokens_per_second": 450809.36, "peak_vram_gb": 4.34874},
+    {"batch_size": 24, "tokens_per_second": 452397.46, "peak_vram_gb": 6.48555},
+    {"batch_size": 32, "tokens_per_second": 449074.46, "peak_vram_gb": 8.62237}
+  ],
+  "chosen_start": {"batch_size": 24, "compile": true}
+}

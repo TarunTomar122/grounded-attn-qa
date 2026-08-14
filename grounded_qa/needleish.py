@@ -51,6 +51,7 @@ class NeedleConfig:
             vocab_size=8192,
             source_length=1024,
             target_length=512,
+            dropout=0.1,
             embedding_scale=math.sqrt(512),
             cross_attention_rope=False,
         )
@@ -134,17 +135,16 @@ class GroupedQueryAttention(nn.Module):
             k = k.repeat_interleave(repeats, dim=1)
             v = v.repeat_interleave(repeats, dim=1)
 
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
-        if self.collect_stats:
-            self.last_logit_std = float(scores.detach().float().std().cpu())
-        valid = key_valid[:, None, None, :].expand(batch, 1, query_length, key_length)
+        valid = key_valid[:, None, None, :]
         use_causal = self.causal if causal is None else causal
         if use_causal:
             causal_mask = torch.ones((query_length, key_length), dtype=torch.bool, device=query.device).tril()
             valid = valid & causal_mask[None, None]
-        scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
-        attention = F.softmax(scores.float(), dim=-1).to(scores.dtype)
-        output = torch.matmul(attention, v).transpose(1, 2).reshape(batch, query_length, -1)
+        if self.collect_stats:
+            scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            self.last_logit_std = float(scores.detach().float().std().cpu())
+        output = F.scaled_dot_product_attention(q, k, v, attn_mask=valid)
+        output = output.transpose(1, 2).reshape(batch, query_length, -1)
         return self.out_proj(output)
 
 
@@ -154,11 +154,12 @@ class EncoderBlock(nn.Module):
         self.input_layernorm = ZCRMSNorm(cfg.d_model, cfg.rmsnorm_eps)
         self.self_attn = GroupedQueryAttention(cfg)
         self.attn_gate = nn.Parameter(torch.zeros(1))
+        self.dropout = nn.Dropout(cfg.dropout)
 
     def forward(self, x: torch.Tensor, valid: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
         normalized = self.input_layernorm(x)
         update = self.self_attn(normalized, normalized, key_valid=valid, query_positions=positions, key_positions=positions)
-        return x + torch.sigmoid(self.attn_gate) * update
+        return x + torch.sigmoid(self.attn_gate) * self.dropout(update)
 
 
 class DecoderBlock(nn.Module):
@@ -171,6 +172,7 @@ class DecoderBlock(nn.Module):
         self.encoder_attn = GroupedQueryAttention(cfg)
         self.cross_attn_gate = nn.Parameter(torch.zeros(1))
         self.cross_attention_rope = cfg.cross_attention_rope
+        self.dropout = nn.Dropout(cfg.dropout)
 
     def forward(
         self,
@@ -189,7 +191,7 @@ class DecoderBlock(nn.Module):
             query_positions=target_positions,
             key_positions=target_positions,
         )
-        x = x + torch.sigmoid(self.self_attn_gate) * update
+        x = x + torch.sigmoid(self.self_attn_gate) * self.dropout(update)
         update = self.encoder_attn(
             self.encoder_attn_layer_norm(x),
             memory,
@@ -199,7 +201,7 @@ class DecoderBlock(nn.Module):
             causal=False,
             use_rope=self.cross_attention_rope,
         )
-        return x + torch.sigmoid(self.cross_attn_gate) * update
+        return x + torch.sigmoid(self.cross_attn_gate) * self.dropout(update)
 
 
 class NeedleishModel(nn.Module):

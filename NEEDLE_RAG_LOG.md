@@ -83,6 +83,33 @@ The assigned host exposes one RTX 4090, BF16 support, 49,140 MiB VRAM, 20 vCPU,
 and a 50 GB persistent volume at `/root/autodl-tmp`. All environments, caches,
 datasets, runs, and checkpoints remain on that volume.
 
+The faithful PyTorch port now uses scaled-dot-product attention. At the maximum
+1,024-token source and 512-token decoder lengths:
+
+| Mode | Batch | Padded tokens/s | Peak VRAM |
+|---|---:|---:|---:|
+| Eager BF16 | 12 | 242,347 | 5.30 GB |
+| Compiled BF16 | 12 | 446,824 | 3.28 GB |
+| Compiled BF16 | 24 | **452,397** | 6.49 GB |
+
+The measured N1 training loop, including CE, z-loss, clipping, and AdamW,
+sustained about 405k–412k padded tokens/s and 250k actual tokens/s after compile.
+
+### Preliminary N1 data decision
+
+A complete 1,590-row RAG shard showed that raw citation-heavy answers have a
+median length of 623 tokens. Removing inline `<ref>quoted evidence</ref>` blocks
+while retaining their source IDs for evidence selection reduces the median
+target to 286 tokens. We therefore train N1 on the clean answer text and reserve
+explicit provenance supervision for N2-PG.
+
+The same shard had a median of five sources and only 15.5% of full contexts fit
+1,024 tokens. Keeping all gold-cited sources first and filling the remainder
+with deterministically shuffled distractors raised context fit to 39.5%.
+Conservative unsupported-answer filtering plus the 512-token target limit left
+399 usable rows (25.1%). This is a preliminary single-shard rate; the full
+extracted corpus audit will replace it.
+
 ### Next measured gates
 
 1. Freeze N0 QA/context-dependence evaluation sets.

@@ -4,6 +4,7 @@ import torch
 
 from grounded_qa.needle_tokenizer import SPECIAL_TOKENS
 from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, NeedleishModel
+from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
 from grounded_qa.synth_data import encode_synth_row, source_bucket, split_for_source
 
 
@@ -38,8 +39,32 @@ def test_public_checkpoint_configuration_is_exact() -> None:
     model = NeedleishModel(cfg)
     assert (cfg.vocab_size, cfg.source_length, cfg.target_length) == (8192, 1024, 512)
     assert cfg.embedding_scale == 512**0.5
+    assert cfg.dropout == 0.1
     assert not cfg.cross_attention_rope
     assert model.n_params() == 26_233_372
+
+
+def test_synth_rag_evidence_context_keeps_cited_source() -> None:
+    class Tokenizer:
+        @staticmethod
+        def encode(text: str) -> list[str]:
+            return text.split()
+
+    constraints = "<source_1>wrong fact</source_1> <source_2>gold fact</source_2>"
+    answer = 'Answer.<ref name="source_2">gold fact</ref>'
+    assert parse_sources(constraints) == [("1", "wrong fact"), ("2", "gold fact")]
+    assert cited_source_ids(answer) == ["2"]
+    assert clean_answer(answer) == "Answer."
+    assert appears_unsupported("Sources do not contain enough information.")
+    selected = evidence_context(
+        row_id="row",
+        query="question",
+        constraints=constraints,
+        answer=answer,
+        tokenizer=Tokenizer(),
+        source_length=6,
+    )
+    assert selected is not None and "source_2" in selected and "source_1" not in selected
 
 
 def test_forward_is_finite_and_has_vocab_projection() -> None:
