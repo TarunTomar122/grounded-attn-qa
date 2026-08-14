@@ -27,14 +27,15 @@ class PointerGenerator(nn.Module):
             self.pointer_q(decoder_state),
             self.pointer_k(memory),
         ) / math.sqrt(memory.shape[-1])
-        if not context_mask.any(dim=-1).all():
-            raise ValueError("Every example needs at least one copyable context token")
-        scores = scores.masked_fill(~context_mask[:, None, :], float("-inf"))
-        copy_position_probs = scores.softmax(dim=-1)
+        has_context = context_mask.any(dim=-1)
+        fallback = ~has_context[:, None] & torch.arange(memory.shape[1], device=memory.device).eq(0)[None]
+        scores = scores.masked_fill(~(context_mask | fallback)[:, None, :], float("-inf"))
+        copy_position_probs = scores.softmax(dim=-1) * has_context[:, None, None]
         pointer_context = torch.einsum("bts,bsd->btd", copy_position_probs, memory)
         p_gen = torch.sigmoid(
             self.gate(torch.cat((decoder_state, pointer_context, previous_embedding), dim=-1))
         ).squeeze(-1)
+        p_gen = torch.where(has_context[:, None], p_gen, torch.ones_like(p_gen))
         vocab_logits = decoder_state @ vocab_weight.transpose(0, 1)
         return vocab_logits, copy_position_probs, p_gen, pointer_context
 

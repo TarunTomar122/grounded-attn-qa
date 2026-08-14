@@ -7,6 +7,7 @@ from grounded_qa.needle_tokenizer import SPECIAL_TOKENS
 from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, NeedleishModel
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
 from grounded_qa.synth_data import encode_synth_row, source_bucket, split_for_source
+from scripts.evaluate_public_needle import generate_batch
 
 
 def tiny_config() -> NeedleConfig:
@@ -163,3 +164,28 @@ def test_synth_encoding_preserves_answer_and_regions() -> None:
     assert row.target_ids[-1] == 1
     assert any(row.reasoning_mask)
     assert any(row.answer_mask)
+
+
+def test_pointer_evaluator_decodes() -> None:
+    model = NeedlePointerModel(tiny_config())
+    model.eval()
+    model.pointer.gate.weight.data.zero_()
+    model.pointer.gate.bias.data.fill_(-100)
+    source = torch.tensor([[4, 5, 6]])
+    valid = torch.ones_like(source, dtype=torch.bool)
+    context = torch.tensor([[False, True, True]])
+    generated = generate_batch(model, source, valid, 2, context)
+    assert generated.shape == (1, 2)
+    assert set(generated[0].tolist()) <= {5, 6}
+
+
+def test_pointer_empty_context_falls_back_to_vocabulary() -> None:
+    model = NeedlePointerModel(tiny_config())
+    source = torch.tensor([[4, 5]])
+    valid = torch.ones_like(source, dtype=torch.bool)
+    context = torch.zeros_like(source, dtype=torch.bool)
+    decoder = torch.tensor([[1]])
+    output = model(source, valid, context, decoder, torch.ones_like(decoder, dtype=torch.bool))
+    assert torch.equal(output.copy_position_probs, torch.zeros_like(output.copy_position_probs))
+    assert torch.equal(output.p_gen, torch.ones_like(output.p_gen))
+    torch.testing.assert_close(output.final_distribution(source).sum(dim=-1), torch.ones(1, 1))

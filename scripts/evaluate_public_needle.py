@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -8,23 +9,37 @@ from pathlib import Path
 import torch
 
 from grounded_qa.metrics import exact_match, repeated_ngram_rate, token_f1, unsupported_entity_rate, unsupported_number_rate
+from grounded_qa.needle_pointer import NeedlePointerModel, NeedlePointerOutput
 from grounded_qa.needle_tokenizer import EOS_ID, NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig, NeedleishModel, load_public_checkpoint
 
 
 @torch.inference_mode()
 def generate_batch(
-    model: NeedleishModel,
+    model: NeedleishModel | NeedlePointerModel,
     source_ids: torch.Tensor,
     source_valid: torch.Tensor,
     max_new_tokens: int,
+    context_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     memory = model.encode(source_ids, source_valid)
     decoder = torch.full((source_ids.shape[0], 1), EOS_ID, dtype=torch.long, device=source_ids.device)
     finished = torch.zeros(source_ids.shape[0], dtype=torch.bool, device=source_ids.device)
     for _ in range(max_new_tokens):
-        logits = model.decode(decoder, memory, source_valid, torch.ones_like(decoder, dtype=torch.bool))
-        next_ids = logits[:, -1].argmax(dim=-1)
+        target_valid = torch.ones_like(decoder, dtype=torch.bool)
+        if isinstance(model, NeedlePointerModel):
+            if context_mask is None:
+                raise ValueError("Pointer decoding requires a context mask")
+            output = model.decode_pointer(decoder, memory, source_ids, source_valid, context_mask, target_valid)
+            last = NeedlePointerOutput(
+                output.vocab_logits[:, -1:],
+                output.copy_position_probs[:, -1:],
+                output.p_gen[:, -1:],
+            )
+            next_ids = last.final_distribution(source_ids)[:, 0].argmax(dim=-1)
+        else:
+            logits = model.decode(decoder, memory, source_valid, target_valid)
+            next_ids = logits[:, -1].argmax(dim=-1)
         next_ids = torch.where(finished, torch.full_like(next_ids, EOS_ID), next_ids)
         decoder = torch.cat((decoder, next_ids[:, None]), dim=1)
         finished |= next_ids.eq(EOS_ID)
@@ -73,15 +88,23 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--pointer", action="store_true")
     args = parser.parse_args()
 
-    rows = [json.loads(line) for line in args.input.read_text().splitlines() if line]
+    input_bytes = args.input.read_bytes()
+    rows = [json.loads(line) for line in input_bytes.decode().splitlines() if line]
     tokenizer = NeedleTokenizer(args.tokenizer, append_markers=False)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-    model = NeedleishModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=dtype)
+    model_class = NeedlePointerModel if args.pointer else NeedleishModel
+    model = model_class(NeedleConfig.public_checkpoint()).to(device=device, dtype=dtype)
     if args.checkpoint.suffix == ".safetensors":
-        load_public_checkpoint(model, args.checkpoint)
+        if args.pointer:
+            from safetensors.torch import load_file
+
+            model.load_state_dict(load_file(str(args.checkpoint), device=str(device)))
+        else:
+            load_public_checkpoint(model, args.checkpoint)
     else:
         model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
     model.eval()
@@ -95,10 +118,13 @@ def main() -> None:
         width = max(map(len, encoded))
         source = torch.zeros((len(batch), width), dtype=torch.long, device=device)
         valid = torch.zeros_like(source, dtype=torch.bool)
+        context_mask = torch.zeros_like(source, dtype=torch.bool)
         for index, ids in enumerate(encoded):
             source[index, : len(ids)] = torch.tensor(ids, device=device)
             valid[index, : len(ids)] = True
-        generated = generate_batch(model, source, valid, args.max_new_tokens).cpu().tolist()
+            context_start = len(tokenizer.encode(batch[index]["question"])) + 1
+            context_mask[index, context_start : len(ids)] = True
+        generated = generate_batch(model, source, valid, args.max_new_tokens, context_mask).cpu().tolist()
         for row, ids in zip(batch, generated):
             eos = EOS_ID in ids
             if eos:
@@ -120,8 +146,9 @@ def main() -> None:
 
     report = {
         "checkpoint": str(args.checkpoint),
+        "evaluation_set": {"path": str(args.input), "sha256": hashlib.sha256(input_bytes).hexdigest(), "rows": len(rows)},
         "model": NeedleConfig.public_checkpoint().to_dict(),
-        "decoding": {"method": "raw greedy", "decoder_start_id": EOS_ID, "max_new_tokens": args.max_new_tokens},
+        "decoding": {"method": "raw greedy", "pointer": args.pointer, "decoder_start_id": EOS_ID, "max_new_tokens": args.max_new_tokens},
         "summary": summarize(results),
         "examples": results,
     }
