@@ -555,3 +555,46 @@ particular question*. The next experiment should therefore test a
 question-to-claim formulation (and validate its semantic fidelity) before
 spending another long adapter run. Extending either current curriculum would
 repeat a proven low-coverage regime.
+
+### N3 declarative claim and QA2D-teacher diagnostics
+
+The deterministic deployed claim format changed the verifier input from
+`Question + Candidate answer` to `Claim: The answer to the question "..." is
+"..."`. It was the best small-format change so far: its 500-step NLI-adapter
+specialization (W&B `tievpmkg`) reached support AUC **0.6429**, compared with
+0.6166 for the matched local-window direct-prompt run. However, its
+validation-calibrated end-to-end gate still accepted only 4/776 observed N0
+candidates and none of five handwritten valid answers. A 250-step continuation
+regressed to 0.6296 AUC, so it was stopped rather than extended.
+
+Increasing adapter rank from 32 to 64 doubled the isolated trainable branch
+from roughly 0.4M to 0.8M parameters. It slightly improved SNLI AUC (0.7706 to
+0.7791) but had identical zero-shot QA transfer (about 0.585) and the same
+250-step deployable-format AUC (0.623 versus 0.624). Adapter capacity is not
+the active bottleneck.
+
+We also tested a stronger training-only QA-to-declarative teacher:
+`domenicrosati/QA2D-t5-small` (Apache-2.0). It correctly turns the crucial
+wrong-entity case into `41 red lanterns were inventoried at North Pier`, which
+is the appropriate hypothesis against `South Pier listed 41 red lanterns.`
+The generated 17,390 frozen-reader claims are cached with a model/data manifest
+on the remote volume. A claim audit filtered 912 malformed outputs that either
+omitted the candidate or changed negation, yielding 15,526 training and 785
+validation teacher-formatted rows.
+
+QA2D cannot be part of the deployed path: it is a second seq2seq model needed
+at inference to make the claim. We therefore trained the small N2 verifier
+adapter with 50% QA2D teacher claims and 50% deterministic deployable claims,
+then validated only on deterministic claims. This was a useful negative
+transfer test: at step 250 (W&B `02j6leqw`) deployable-format AUC was **0.5986**,
+well below the deterministic-only control's 0.6240. The run was stopped. The
+external converter is therefore retained only as an audited research artifact,
+not an architecture dependency.
+
+At this point the remaining structural difference is that every encoder verifier
+variant pools an encoder representation, while the successful reader relies on
+the decoder's trained cross-attention from a query to source evidence. The next
+architecture experiment should use a small verification-only decoder-adapter
+path and classify its one-token cross-attended state against the pointer-local
+evidence window. This is a new information route, not another pooled-head or
+format repetition.
