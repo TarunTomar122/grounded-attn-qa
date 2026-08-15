@@ -62,12 +62,14 @@ def main() -> None:
     if args.adapter_rank:
         encoder.adapters.load_state_dict(torch.load(args.head, map_location=device, weights_only=False)["adapter"])
     encoder.eval()
+    state = load_verifier_state(args.head, device) if args.nli else load_head_state(args.head, device)
+    hidden_dim = state["0.weight"].shape[0] if args.nli and not args.hidden_dim else args.hidden_dim
     head = (
-        nn.Sequential(nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, args.hidden_dim), nn.GELU(), nn.Linear(args.hidden_dim, 3))
+        nn.Sequential(nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, 3))
         if args.nli
-        else candidate_verifier_head(NeedleConfig.public_checkpoint().d_model, args.hidden_dim)
+        else candidate_verifier_head(NeedleConfig.public_checkpoint().d_model, hidden_dim)
     ).to(device=device, dtype=dtype)
-    head.load_state_dict(load_verifier_state(args.head, device) if args.nli else load_head_state(args.head, device))
+    head.load_state_dict(state)
     head.eval()
 
     eligible: list[tuple[int, list[int], int, int, int]] = []
