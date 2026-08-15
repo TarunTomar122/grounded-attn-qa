@@ -34,6 +34,12 @@ class DataTests(unittest.TestCase):
         self.assertEqual(chosen.answer_coverage, 1.0)
         self.assertEqual(chosen.false_answer_rate, 0.0)
 
+    def test_threshold_sweep_has_safe_fallback_for_saturated_probabilities(self) -> None:
+        chosen = choose_threshold(sweep_thresholds([1.0, 1.0], [True, False]), max_false_answer_rate=0.0)
+        self.assertGreater(chosen.threshold, 1.0)
+        self.assertEqual(chosen.answer_coverage, 0.0)
+        self.assertEqual(chosen.false_answer_rate, 0.0)
+
     def test_index_addressable_procedural_rows_are_reproducible(self) -> None:
         first = procedural_copy_row(42, 1_234, hard_distractors=True)
         self.assertEqual(first, procedural_copy_row(42, 1_234, hard_distractors=True))

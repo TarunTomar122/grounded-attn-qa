@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
@@ -17,8 +18,10 @@ def sweep_thresholds(probabilities: list[float], answerable: list[bool], thresho
     if len(probabilities) != len(answerable):
         raise ValueError("probabilities and labels must have the same length")
     points = []
-    for index in range(thresholds):
-        threshold = index / max(thresholds - 1, 1)
+    grid = [index / max(thresholds - 1, 1) for index in range(thresholds)]
+    # BFloat16 sigmoid values can round to exactly 1.0; this is the required
+    # always-refuse fallback when no finite in-range threshold is safe.
+    for threshold in [*grid, math.nextafter(1.0, math.inf)]:
         answered = [probability >= threshold for probability in probabilities]
         positives = sum(answerable)
         negatives = len(answerable) - positives
