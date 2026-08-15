@@ -645,3 +645,49 @@ unreplayed fine-tuning unsafe, but 500 steps has not yet produced a useful
 verifier. The next run should start from the best step-200 checkpoint and use
 the same fixed reader-replay gate; it should not be extended blindly from the
 last checkpoint.
+
+### Reader-verifier fusion control
+
+We tested whether a post-hoc gate could recover useful grounding from signals
+the reader and the best joint verifier already expose: verifier support,
+candidate probability, generated-token count, EOS, unsupported-number/entity
+rates, and whether the answer occurs literally in the context. The linear
+calibrator was trained on 16,560 context-disjoint reader candidates and
+evaluated on 834 held-out candidates.
+
+The 1,000-step result and an independent 5,000-step control were identical:
+held-out correctness AUC was **0.6030**. At the required <=2% accepted-answer
+risk, it accepted **1/834** candidates (0.24% safe coverage; 99.76% false
+refusal). This is enough optimization for this six-feature linear model. More
+calibrator updates cannot create semantic evidence that the reader/verifier
+signals do not contain, so this fusion route is closed.
+
+### Span-binding replay control
+
+We next trained the shared N2-PG reader to rank the span supporting an
+answerable question above the span at the same token offset in a matched,
+unanswerable question over the *identical context*. Normal N2 pointer batches
+were replayed 50% of the time. This is a direct hard-negative test of
+question-to-evidence binding rather than a separate verifier head.
+
+The first implementation used an unscaled cosine-ranking loss. Because its
+initial positive and negative scores were nearly equal (0.87610 vs 0.86685),
+we ran a stronger, controlled version on the RTX 4090: 1,000 updates, learning
+rate 1e-5, margin 0.05, temperature 0.1, fixed 1,024-row reader validation,
+and evaluation every 100 updates (W&B `wx6izt4u`). The scaling increased the
+binding gradient (initial norm 0.080) without disrupting the reader, but it
+did not improve held-out binding:
+
+| Metric | Step 0 | Step 1,000 |
+| --- | ---: | ---: |
+| Matched-pair ranking accuracy | 56.59% | 56.59% |
+| Positive span score | 0.87610 | 0.87609 |
+| Negative span score | 0.86685 | 0.86679 |
+| Reader pointer-position accuracy | 83.47% | 83.43% |
+
+There was a transient 58.03% ranking value at step 800, but the final value
+returned exactly to baseline and the score gap did not widen. So this run gives
+a clean result: replay protects the reader, while pooled encoder cosine
+similarity is not a learnable semantic binding target here. This does not rule
+out joint answer-and-verification training; it rules out this particular
+same-offset pooled-span contrastive objective as its mechanism.
