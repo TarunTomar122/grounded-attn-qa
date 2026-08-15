@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from grounded_qa.calibration import choose_threshold, sweep_thresholds
 from grounded_qa.metrics import exact_match, token_f1
-from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, evidence_start_loss, pointer_loss
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, evidence_start_loss, evidence_start_targets, pointer_loss
 from grounded_qa.needle_tokenizer import EOS_ID, NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig
 from scripts.train_needle_n1 import load_split, lr_at, optimizers_for
@@ -109,7 +109,7 @@ def evaluate(model, data, device, args) -> dict[str, float]:
     model.eval()
     all_probabilities: list[torch.Tensor] = []
     all_answerable: list[torch.Tensor] = []
-    totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "gold_pointer_probability", "p_gen", "wrong_sequence", "wrong_weighted", "answerability_bce", "evidence_start", "tp", "tn", "fp", "fn", "positive_probability", "negative_probability", "wrong_probability", "wrong_rows")}
+    totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "gold_pointer_probability", "p_gen", "wrong_sequence", "wrong_weighted", "answerability_bce", "evidence_start", "evidence_correct", "evidence_positive_rows", "evidence_positive_correct", "evidence_negative_rows", "evidence_negative_correct", "tp", "tn", "fp", "fn", "positive_probability", "negative_probability", "wrong_probability", "wrong_rows")}
     for start in range(0, len(data["source_ids"]), args.batch_size):
         indices = torch.arange(start, min(start + args.batch_size, len(data["source_ids"])))
         source, source_valid, context_mask, decoder, target, valid, gold, answerable = batch(data, indices, device)
@@ -150,6 +150,13 @@ def evaluate(model, data, device, args) -> dict[str, float]:
             totals["wrong_weighted"] += weighted
         if output.answerability_logits is not None:
             totals["evidence_start"] += float(evidence_start_loss(output, gold, answerable)) * rows
+            evidence_target = evidence_start_targets(gold, answerable)
+            evidence_correct = output.evidence_position_logits.argmax(dim=-1).eq(evidence_target)
+            totals["evidence_correct"] += int(evidence_correct.sum())
+            totals["evidence_positive_rows"] += int(answerable.sum())
+            totals["evidence_positive_correct"] += int((evidence_correct & answerable).sum())
+            totals["evidence_negative_rows"] += int((~answerable).sum())
+            totals["evidence_negative_correct"] += int((evidence_correct & ~answerable).sum())
             probability = output.answerability_logits.sigmoid()
             all_probabilities.append(probability.cpu())
             all_answerable.append(answerable.cpu())
@@ -191,6 +198,9 @@ def evaluate(model, data, device, args) -> dict[str, float]:
             "val/loss": metrics["val/loss"] + args.answerability_weight * totals["evidence_start"] / totals["rows"],
             "val/answerability_bce": totals["answerability_bce"] / totals["rows"],
             "val/evidence_start_nll": totals["evidence_start"] / totals["rows"],
+            "val/evidence_choice_accuracy": totals["evidence_correct"] / totals["rows"],
+            "val/evidence_start_accuracy": totals["evidence_positive_correct"] / max(totals["evidence_positive_rows"], 1),
+            "val/evidence_no_answer_accuracy": totals["evidence_negative_correct"] / max(totals["evidence_negative_rows"], 1),
             "val/answerability_accuracy": (totals["tp"] + totals["tn"]) / totals["rows"],
             "val/answerability_precision": precision,
             "val/answerability_recall": recall,
@@ -378,6 +388,7 @@ def main() -> None:
         loss_valid = valid & answerable[:, None] if args.answerability else valid
         loss = pointer_loss(output, source, target, loss_valid, gold, z_weight=args.z_loss, pointer_weight=args.pointer_weight, first_token_weight=args.first_token_weight, eos_token_weight=args.eos_token_weight)
         evidence_loss = evidence_start_loss(output, gold, answerable) if output.evidence_position_logits is not None else loss.total.new_zeros(())
+        evidence_target = evidence_start_targets(gold, answerable) if output.evidence_position_logits is not None else None
         total_loss = loss.total + args.answerability_weight * evidence_loss
         total_loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -395,6 +406,7 @@ def main() -> None:
                 "train/mean_gold_pointer_probability": float(loss.mean_gold_pointer_probability.detach()),
                 "train/mean_p_gen": float(loss.mean_p_gen.detach()),
                 "train/evidence_start_nll": float(evidence_loss.detach()),
+                "train/evidence_choice_accuracy": float(output.evidence_position_logits.argmax(dim=-1).eq(evidence_target).float().mean()) if evidence_target is not None else 0.0,
                 "train/answerability_bce": float(F.binary_cross_entropy_with_logits(output.answerability_logits, answerable.float()).detach()) if output.answerability_logits is not None else 0.0,
                 "train/answerability_accuracy": float((output.answerability_logits.ge(0) == answerable).float().mean()) if output.answerability_logits is not None else 0.0,
                 "train/grad_norm": float(grad_norm),

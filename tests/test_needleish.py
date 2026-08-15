@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import pytest
 
-from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput, evidence_start_loss, pointer_loss
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput, evidence_start_loss, evidence_start_targets, pointer_loss
 from grounded_qa.needle_tokenizer import SPECIAL_TOKENS
 from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, NeedleishModel
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
@@ -252,6 +252,7 @@ def test_evidence_start_loss_uses_null_for_negative_rows() -> None:
         torch.tensor([[2.0, 1.0, 0.0], [2.0, 0.0, 1.0]]),
     )
     loss = evidence_start_loss(output, torch.tensor([[0], [-1]]), torch.tensor([True, False]))
+    assert evidence_start_targets(torch.tensor([[0], [-1]]), torch.tensor([True, False])).tolist() == [1, 0]
     torch.testing.assert_close(loss, torch.nn.functional.cross_entropy(output.evidence_position_logits, torch.tensor([1, 0])))
 
 

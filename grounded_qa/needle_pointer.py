@@ -151,15 +151,19 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
         return logits[:, 1:].logsumexp(dim=-1) - logits[:, 0]
 
 
+def evidence_start_targets(gold_copy_positions: torch.Tensor, answerable: torch.Tensor) -> torch.Tensor:
+    """Index zero is no-answer; source positions are shifted by one."""
+    starts = gold_copy_positions[:, 0]
+    if (answerable & starts.lt(0)).any():
+        raise ValueError("answerable rows require a gold first copy position")
+    return torch.where(answerable, starts + 1, torch.zeros_like(starts))
+
+
 def evidence_start_loss(output: NeedlePointerOutput, gold_copy_positions: torch.Tensor, answerable: torch.Tensor) -> torch.Tensor:
     """Supervise the exact evidence start, or the no-answer class for negatives."""
     if output.evidence_position_logits is None:
         raise ValueError("evidence_start_loss requires NeedleAnswerablePointerModel output")
-    starts = gold_copy_positions[:, 0]
-    if (answerable & starts.lt(0)).any():
-        raise ValueError("answerable rows require a gold first copy position")
-    targets = torch.where(answerable, starts + 1, torch.zeros_like(starts))
-    return F.cross_entropy(output.evidence_position_logits.float(), targets)
+    return F.cross_entropy(output.evidence_position_logits.float(), evidence_start_targets(gold_copy_positions, answerable))
 
 
 @dataclass
