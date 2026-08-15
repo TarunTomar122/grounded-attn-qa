@@ -18,6 +18,7 @@ from grounded_qa.needle_qa_data import (
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, TARGET_LENGTH, tensorize
 from scripts.prepare_needle_n3 import cross_pair_negatives
 from scripts.prepare_needle_n3_entity import prepare_entity_binding_pairs, prepare_relation_binding_pairs
+from scripts.prepare_needle_n3_official import select_tensor_rows
 
 
 @dataclass
@@ -241,6 +242,15 @@ class NeedleQADataTests(unittest.TestCase):
                 answerable.source_ids[answerable.context_start :],
                 unanswerable.source_ids[unanswerable.context_start :],
             )
+
+    def test_tensor_row_selection_is_deterministic_and_non_mutating(self) -> None:
+        rows = {"source_ids": torch.arange(12).reshape(4, 3), "answerable": torch.ones(4, dtype=torch.bool)}
+        first = select_tensor_rows(rows, 3, seed=5)
+        second = select_tensor_rows(rows, 3, seed=5)
+        self.assertTrue(torch.equal(first["source_ids"], second["source_ids"]))
+        self.assertTrue(torch.equal(first["answerable"], second["answerable"]))
+        self.assertEqual(first["source_ids"].shape, (3, 3))
+        self.assertTrue(rows["answerable"].all())
 
 
 if __name__ == "__main__":
