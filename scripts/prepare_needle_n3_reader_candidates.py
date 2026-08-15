@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -26,6 +27,13 @@ def nli_label(row: dict) -> int:
     if is_supported_candidate(row):
         return 2  # support
     return 1 if row["answerable"] else 0  # refute, neutral
+
+
+def usable_claim(question: str, candidate: str, claim: str) -> bool:
+    """Reject obvious QA2D failures before they become verifier labels."""
+    candidate_tokens = normalized(candidate)
+    negated = lambda text: bool(re.search(r"\b(?:not|never|no)\b|\b\w+n['’]t\b", text.lower()))
+    return bool(candidate_tokens) and candidate_tokens in normalized(claim) and negated(question) == negated(claim)
 
 
 def reader_input_rows(items, tokenizer: NeedleTokenizer) -> tuple[dict[str, list[dict]], dict[str, int]]:
@@ -101,7 +109,16 @@ def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path]
             if start < 0:
                 stats["nonliteral_candidate"] += 1
                 continue
-            query = claims[claim_key(row["question"], candidate)] if claims is not None else verifier_claim(row["question"], candidate) if claim else verifier_query(row["question"], candidate)
+            if claims is not None:
+                query = claims.get(claim_key(row["question"], candidate))
+                if query is None:
+                    stats["missing_claim"] += 1
+                    continue
+                if not usable_claim(row["question"], candidate, query):
+                    stats["invalid_claim"] += 1
+                    continue
+            else:
+                query = verifier_claim(row["question"], candidate) if claim else verifier_query(row["question"], candidate)
             window = _evidence_window(
                 tokenizer,
                 query,
