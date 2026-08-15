@@ -21,6 +21,12 @@ def is_supported_candidate(row: dict) -> bool:
     return bool(row.get("answerable")) and bool(candidate) and any(candidate == normalized(answer) for answer in row["answers"])
 
 
+def nli_label(row: dict) -> int:
+    if is_supported_candidate(row):
+        return 2  # support
+    return 1 if row["answerable"] else 0  # refute, neutral
+
+
 def reader_input_rows(items, tokenizer: NeedleTokenizer) -> tuple[dict[str, list[dict]], dict[str, int]]:
     grouped: dict[str, list[dict]] = defaultdict(list)
     for item in items:
@@ -80,7 +86,7 @@ def write_reader_inputs(tokenizer_path: Path, output_dir: Path) -> None:
 
 def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path], output_dir: Path) -> None:
     tokenizer = NeedleTokenizer(tokenizer_path, append_markers=False)
-    rows: dict[str, list[tuple[list[int], int, bool, int, int]]] = {"train": [], "validation": []}
+    rows: dict[str, list[tuple[list[int], int, bool, int, int, int]]] = {"train": [], "validation": []}
     stats = defaultdict(int)
     for report_path in report_paths:
         report = json.loads(report_path.read_text())
@@ -106,12 +112,14 @@ def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path]
                 continue
             ids, _, candidate_positions, context_start, _ = window
             supported = is_supported_candidate(row)
+            label = nli_label(row)
             rows[row["split"]].append((
                 ids,
                 context_start,
                 supported,
                 context_start + candidate_positions[0],
                 context_start + candidate_positions[-1] + 1,
+                label,
             ))
             stats["supported" if supported else "unsupported"] += 1
             stats["answerable" if row["answerable"] else "unanswerable"] += 1
@@ -124,15 +132,18 @@ def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path]
         "splits": {},
     }
     for split, examples in rows.items():
-        tensors = tensorize([(ids, context_start, label) for ids, context_start, label, _, _ in examples])
-        tensors["candidate_start"] = torch.tensor([start for _, _, _, start, _ in examples], dtype=torch.int32)
-        tensors["candidate_end"] = torch.tensor([end for _, _, _, _, end in examples], dtype=torch.int32)
+        tensors = tensorize([(ids, context_start, label) for ids, context_start, label, _, _, _ in examples])
+        tensors["candidate_start"] = torch.tensor([start for _, _, _, start, _, _ in examples], dtype=torch.int32)
+        tensors["candidate_end"] = torch.tensor([end for _, _, _, _, end, _ in examples], dtype=torch.int32)
+        tensors["nli_label"] = torch.tensor([label for _, _, _, _, _, label in examples], dtype=torch.int64)
         path = output_dir / f"n3-reader-candidates-{split}.pt"
         torch.save(tensors, path)
         manifest["splits"][split] = {
             "rows": len(examples),
             "supported": int(tensors["answerable"].sum()),
             "unsupported": int((~tensors["answerable"]).sum()),
+            "neutral": int(tensors["nli_label"].eq(0).sum()),
+            "refute": int(tensors["nli_label"].eq(1).sum()),
             "file": {"path": path.name, "bytes": path.stat().st_size, "sha256": sha256(path)},
         }
     (output_dir / "n3-reader-candidates-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
