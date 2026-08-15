@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 from datasets import load_dataset
 
-from grounded_qa.needle_qa_data import SQUAD2_DATASET, SQUAD2_REVISION
+from grounded_qa.needle_qa_data import SQUAD2_DATASET, SQUAD2_REVISION, _evidence_window
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, sha256
 from scripts.prepare_needle_n3_matched import split_for_context
@@ -25,18 +25,18 @@ def normalized(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
 
 
-def distractor(context: str, answer: str, rng: random.Random) -> str | None:
-    words = re.findall(r"\S+", context)
+def distractor(context: str, answer: str, rng: random.Random) -> tuple[str, int] | None:
+    words = list(re.finditer(r"\S+", context))
     answer_words = max(1, min(8, len(answer.split())))
     if len(words) < answer_words:
         return None
     answer_key = normalized(answer)
     for _ in range(32):
         start = rng.randrange(len(words) - answer_words + 1)
-        candidate = " ".join(words[start : start + answer_words])
+        candidate = context[words[start].start() : words[start + answer_words - 1].end()]
         candidate_key = normalized(candidate)
         if candidate_key and candidate_key not in answer_key and answer_key not in candidate_key:
-            return candidate
+            return candidate, words[start].start()
     return None
 
 
@@ -81,14 +81,21 @@ def main() -> None:
             stats["skipped"] += 1
             continue
         split = split_for_context(context)
-        examples = ((positive["question"], answer, True, "positive"), (positive["question"], wrong_candidate, False, "wrong_candidate"), (negatives[0]["question"], unsupported_candidate, False, "unanswerable_question"))
-        for question, candidate, label, kind in examples:
+        examples = (
+            (positive["question"], answer, positive["answers"]["answer_start"][0], True, "positive"),
+            (positive["question"], *wrong_candidate, False, "wrong_candidate"),
+            (negatives[0]["question"], *unsupported_candidate, False, "unanswerable_question"),
+        )
+        for question, candidate, candidate_start, label, kind in examples:
             query = verifier_query(question, candidate)
-            ids = tokenizer.encode_source(query, context)
-            if len(ids) > SOURCE_LENGTH:
+            window = _evidence_window(
+                tokenizer, query, context, candidate_start, candidate_start + len(candidate), max_source_length=SOURCE_LENGTH
+            )
+            if window is None:
                 stats["skipped"] += 1
                 continue
-            rows[split].append((ids, len(tokenizer.encode(query)) + 1, label))
+            ids, _, _, context_start, _ = window
+            rows[split].append((ids, context_start, label))
             stats[kind] += 1
 
     args.output_dir.mkdir(parents=True, exist_ok=True)

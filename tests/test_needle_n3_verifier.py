@@ -10,4 +10,4 @@ def test_verifier_query_contains_question_and_candidate() -> None:
 def test_distractor_excludes_gold_answer() -> None:
     value = distractor("Rhea arrived at noon beside the old gate.", "Rhea", random.Random(4))
     assert value is not None
-    assert "rhea" not in value.lower()
+    assert "rhea" not in value[0].lower()
