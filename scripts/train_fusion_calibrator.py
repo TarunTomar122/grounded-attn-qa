@@ -86,7 +86,7 @@ def main() -> None:
         "train": metrics(train_rows, train_x, train_y, mean, scale, model),
         "validation": metrics(validation_rows, validation_x, validation_y, mean, scale, model),
         "state": {"weight": model.weight.detach().tolist(), "bias": model.bias.detach().tolist(), "mean": mean.tolist(), "scale": scale.tolist()},
-        "args": vars(args),
+        "args": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2))
