@@ -284,6 +284,7 @@ def main() -> None:
     parser.add_argument("--tokenizer", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--batch-size", type=int, default=24)
+    parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--lr", type=float, default=3.0e-5)
     parser.add_argument("--muon-lr", type=float, default=0.02)
@@ -337,7 +338,9 @@ def main() -> None:
         step, seen_tokens = state["step"], state.get("seen_tokens", 0)
     model = torch.compile(eager) if args.compile else eager
     epoch_steps = len(train["source_ids"]) // args.batch_size
-    total_steps = epoch_steps
+    if epoch_steps == 0:
+        parser.error("training split is smaller than one batch")
+    total_steps = args.epochs * epoch_steps
     if args.max_steps:
         total_steps = min(total_steps, args.max_steps)
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -356,8 +359,10 @@ def main() -> None:
     started = last_log = time.perf_counter()
     last_step = step
     last_tokens = seen_tokens
-    order = torch.randperm(len(train["source_ids"]), generator=torch.Generator().manual_seed(args.seed))
-    for start in range(step * args.batch_size, total_steps * args.batch_size, args.batch_size):
+    while step < total_steps:
+        epoch = step // epoch_steps
+        start = (step % epoch_steps) * args.batch_size
+        order = torch.randperm(len(train["source_ids"]), generator=torch.Generator().manual_seed(args.seed + epoch))
         indices = order[start : start + args.batch_size]
         source, source_valid, context_mask, decoder, target, valid, gold, answerable = batch(train, indices, device)
         adam_lr, muon_lr = lr_at(step, total_steps, args.lr), lr_at(step, total_steps, args.muon_lr)

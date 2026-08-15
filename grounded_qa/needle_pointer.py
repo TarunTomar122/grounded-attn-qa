@@ -98,7 +98,9 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
     def __init__(self, cfg: NeedleConfig):
         super().__init__(cfg)
         self.answerability = nn.Linear(cfg.d_model * 4, 1)
-        self.answerability.apply(self._init)
+        # Product features can be much larger than a token embedding. Start at
+        # an unbiased 50/50 refusal decision instead of saturated logits.
+        nn.init.zeros_(self.answerability.weight)
         nn.init.zeros_(self.answerability.bias)
 
     def forward(
