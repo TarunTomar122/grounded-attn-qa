@@ -291,6 +291,25 @@ def test_negative_eos_loss_is_finite_and_reaches_generator() -> None:
     assert model.pointer.gate.weight.grad.abs().sum() > 0
 
 
+def test_negative_eos_loss_keeps_gradient_for_bfloat16_vocab_underflow() -> None:
+    eos_id = tiny_config().eos_id
+    vocab_logits = torch.full((1, 1, tiny_config().vocab_size), -100.0, dtype=torch.bfloat16)
+    vocab_logits[..., eos_id] = -1000.0
+    vocab_logits.requires_grad_()
+    output = NeedlePointerOutput(
+        vocab_logits=vocab_logits,
+        copy_position_probs=torch.zeros((1, 1, 2), dtype=torch.bfloat16),
+        p_gen=torch.full((1, 1), 0.5, dtype=torch.bfloat16),
+    )
+
+    loss = negative_eos_loss(output, torch.tensor([[4, 5]]), torch.tensor([False]), eos_id=eos_id)
+
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert vocab_logits.grad is not None
+    assert vocab_logits.grad[..., eos_id].abs() > 0
+
+
 def test_negative_eos_loss_ignores_answerable_rows() -> None:
     model = NeedlePointerModel(tiny_config())
     source = torch.tensor([[4, 5, 6], [7, 8, 9]])

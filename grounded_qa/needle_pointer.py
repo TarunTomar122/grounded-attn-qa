@@ -226,8 +226,16 @@ def negative_eos_loss(
     negative = ~answerable
     if not negative.any():
         return output.vocab_logits.float().sum() * 0
-    probability = output.final_distribution(source_ids)[:, 0, eos_id].float()
-    return -probability[negative].clamp_min(1.0e-8).log().mean()
+    vocab_log_probability = F.log_softmax(output.vocab_logits.float()[:, 0], dim=-1)[:, eos_id]
+    copy_probability = (
+        output.copy_position_probs.float()[:, 0] * source_ids.eq(eos_id)
+    ).sum(dim=-1)
+    p_gen = output.p_gen.float()[:, 0]
+    log_probability = torch.logaddexp(
+        p_gen.log() + vocab_log_probability,
+        torch.log1p(-p_gen) + copy_probability.log(),
+    )
+    return -log_probability[negative].mean()
 
 
 @dataclass
