@@ -373,3 +373,27 @@ commits `2a4793b` and `4e4f032`; tests passed 78/78. W&B runs are
 specific retrieved answer span against the question, rather than classify only
 pooled encoder summaries. Repeating this matched-data curriculum with the
 current pooled classifier is not justified.
+
+### N3 evidence-span/no-answer pilot
+
+The pooled classifier failure motivated a direct answer-span alternative:
+`cd32689` adds a learned no-answer logit and one score per context source
+position. Answerable rows supervise the known first gold copy position;
+unanswerable rows supervise the no-answer class. This is a stricter objective
+than pooled answerability because it must identify provenance before answering.
+
+The matched-data pilot did learn its training loss (validation evidence-start
+NLL 3.43 at initialization, 1.96 at step 500, and 1.69 at step 1,000), but it
+did not transfer the hard decision. At both saved checkpoints, validation
+evidence-start accuracy was 0% and no-answer accuracy was 100%: the head chose
+the easy no-answer class for every matched paragraph. Safe answer coverage was
+1.67% at step 500 and 3.82% at step 1,000, both far below the pooled-head
+control. Pointer source-position accuracy stayed about 90.5--90.9%.
+
+The run was stopped at `/root/autodl-tmp/runs/n3-matched-b4-span-2000/step-001000.pt`.
+W&B runs: `je4muoap` (initial 500 steps) and `1dck51h7` (resumed continuation).
+This rules out both pooled encoder classification and a linear source-start
+head as sufficient natural-QA evidence tests on this checkpoint. The reader
+can still be used as a provenance-constrained copier, but a genuinely grounded
+RAG decision will require an answer-conditioned verifier or a stronger reader,
+rather than more iterations of these heads.
