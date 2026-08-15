@@ -9,18 +9,10 @@ import torch.nn.functional as F
 from torch import nn
 
 from grounded_qa.calibration import choose_threshold, sweep_thresholds
-from grounded_qa.needle_pointer import NeedleAnswerablePointerModel
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, answerability_interaction_features
 from grounded_qa.needleish import NeedleConfig
 from scripts.analyze_pointer_confidence import binary_auc
 from scripts.train_needle_n1 import load_split
-
-
-def interaction_features(memory: torch.Tensor, source_valid: torch.Tensor, context_mask: torch.Tensor) -> torch.Tensor:
-    """A readout probe: pooled question/context features with no reader updates."""
-    question_mask = source_valid & ~context_mask
-    question = (memory * question_mask[..., None]).sum(dim=1) / question_mask.sum(dim=1, keepdim=True).clamp_min(1)
-    context = (memory * context_mask[..., None]).sum(dim=1) / context_mask.sum(dim=1, keepdim=True).clamp_min(1)
-    return torch.cat((question, context, question * context, (question - context).abs()), dim=-1)
 
 
 @torch.no_grad()
@@ -34,7 +26,7 @@ def encode_features(model, data: dict[str, torch.Tensor], indices: torch.Tensor,
         positions = torch.arange(source.shape[1], device=device)[None]
         valid = positions < lengths[:, None]
         context = (positions >= starts[:, None]) & valid
-        features.append(interaction_features(model.encode(source, valid), valid, context).float().cpu())
+        features.append(answerability_interaction_features(model.encode(source, valid), valid, context).float().cpu())
     return torch.cat(features)
 
 
@@ -81,6 +73,7 @@ def main() -> None:
     )
     model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
     model.eval()
+    torch.manual_seed(args.seed)
     generator = torch.Generator().manual_seed(args.seed)
     train_indices = torch.randperm(len(train["source_ids"]), generator=generator)[: args.train_rows]
     validation_indices = torch.arange(len(validation["source_ids"]))
@@ -122,6 +115,9 @@ def main() -> None:
         "slices": slices,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    head_path = args.output.with_suffix(".pt")
+    torch.save({"head": head.state_dict(), "features": report["features"]}, head_path)
+    report["head_checkpoint"] = str(head_path)
     args.output.write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 

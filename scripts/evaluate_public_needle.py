@@ -7,9 +7,15 @@ from collections import defaultdict
 from pathlib import Path
 
 import torch
+from torch import nn
 
 from grounded_qa.metrics import exact_match, repeated_ngram_rate, token_f1, unsupported_entity_rate, unsupported_number_rate
-from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput
+from grounded_qa.needle_pointer import (
+    NeedleAnswerablePointerModel,
+    NeedlePointerModel,
+    NeedlePointerOutput,
+    answerability_interaction_features,
+)
 from grounded_qa.needle_tokenizer import EOS_ID, NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig, NeedleishModel, load_public_checkpoint
 
@@ -109,7 +115,10 @@ def main() -> None:
     parser.add_argument("--pointer", action="store_true")
     parser.add_argument("--answerability", action="store_true")
     parser.add_argument("--answerability-threshold", type=float, default=0.5)
+    parser.add_argument("--interaction-head", type=Path, help="Optional frozen question/context interaction gate checkpoint.")
     args = parser.parse_args()
+    if args.interaction_head and not args.answerability:
+        parser.error("--interaction-head requires --answerability")
 
     input_bytes = args.input.read_bytes()
     rows = [json.loads(line) for line in input_bytes.decode().splitlines() if line]
@@ -129,6 +138,11 @@ def main() -> None:
     else:
         model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
     model.eval()
+    interaction_head = None
+    if args.interaction_head:
+        interaction_head = nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, 1).to(device=device, dtype=dtype)
+        interaction_head.load_state_dict(torch.load(args.interaction_head, map_location=device, weights_only=True)["head"])
+        interaction_head.eval()
 
     results = []
     for start in range(0, len(rows), args.batch_size):
@@ -146,11 +160,14 @@ def main() -> None:
             context_start = len(tokenizer.encode(batch[index]["question"])) + 1
             context_mask[index, context_start : len(ids)] = True
         memory = model.encode(source, valid)
-        probabilities = (
-            model.classify_answerability(memory, valid, context_mask).sigmoid().cpu().tolist()
-            if isinstance(model, NeedleAnswerablePointerModel)
-            else [1.0] * len(batch)
-        )
+        probabilities = [1.0] * len(batch)
+        if isinstance(model, NeedleAnswerablePointerModel):
+            logits = (
+                interaction_head(answerability_interaction_features(memory, valid, context_mask)).squeeze(-1)
+                if interaction_head is not None
+                else model.classify_answerability(memory, valid, context_mask)
+            )
+            probabilities = logits.sigmoid().cpu().tolist()
         generated = generate_batch(model, source, valid, args.max_new_tokens, context_mask, memory).cpu().tolist()
         for row, ids, probability in zip(batch, generated, probabilities):
             eos = EOS_ID in ids
@@ -188,6 +205,7 @@ def main() -> None:
             "method": "raw greedy with refusal gate" if args.answerability else "raw greedy",
             "pointer": pointer,
             "answerability": args.answerability,
+            "answerability_gate": "interaction" if args.interaction_head else "model_head" if args.answerability else None,
             "answerability_threshold": args.answerability_threshold if args.answerability else None,
             "decoder_start_id": EOS_ID,
             "max_new_tokens": args.max_new_tokens,

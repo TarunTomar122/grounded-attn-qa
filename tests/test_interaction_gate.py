@@ -1,6 +1,7 @@
 import torch
 
-from scripts.probe_interaction_gate import interaction_features, parse_slice
+from grounded_qa.needle_pointer import answerability_interaction_features
+from scripts.probe_interaction_gate import parse_slice
 
 
 def test_interaction_features_pool_question_and_context() -> None:
@@ -8,7 +9,7 @@ def test_interaction_features_pool_question_and_context() -> None:
     valid = torch.tensor([[True, True, True]])
     context = torch.tensor([[False, True, True]])
 
-    features = interaction_features(memory, valid, context)
+    features = answerability_interaction_features(memory, valid, context)
 
     expected = torch.tensor([[1.0, 2.0, 4.0, 6.0, 4.0, 12.0, 3.0, 4.0]])
     torch.testing.assert_close(features, expected)

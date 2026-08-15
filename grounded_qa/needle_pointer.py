@@ -9,6 +9,16 @@ from .needleish import NeedleConfig, NeedleishModel
 from .pointer import PointerGenerator
 
 
+def answerability_interaction_features(
+    memory: torch.Tensor, source_valid: torch.Tensor, context_mask: torch.Tensor
+) -> torch.Tensor:
+    """Linear-readout features that retain both question and context summaries."""
+    question_mask = source_valid & ~context_mask
+    question = (memory * question_mask[..., None]).sum(dim=1) / question_mask.sum(dim=1, keepdim=True).clamp_min(1)
+    context = (memory * context_mask[..., None]).sum(dim=1) / context_mask.sum(dim=1, keepdim=True).clamp_min(1)
+    return torch.cat((question, context, question * context, (question - context).abs()), dim=-1)
+
+
 @dataclass
 class NeedlePointerOutput:
     vocab_logits: torch.Tensor
