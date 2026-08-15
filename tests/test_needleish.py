@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import pytest
 
-from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput, pointer_loss
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput, evidence_start_loss, pointer_loss
 from grounded_qa.needle_tokenizer import SPECIAL_TOKENS
 from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, NeedleishModel
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
@@ -224,22 +224,35 @@ def test_answerability_head_receives_gradient_without_copy_targets() -> None:
     output = model(source, valid, context, decoder, torch.ones_like(decoder, dtype=torch.bool))
     assert output.answerability_logits is not None
     torch.nn.functional.binary_cross_entropy_with_logits(output.answerability_logits, torch.zeros(1)).backward()
-    assert model.answerability.weight.grad is not None
+    assert model.evidence.weight.grad is not None
     assert model.pointer.gate.weight.grad is None
 
 
-def test_answerability_head_reads_context_interaction() -> None:
+def test_answerability_head_scores_context_positions_against_no_answer() -> None:
     model = NeedleAnswerablePointerModel(tiny_config())
-    model.answerability.weight.data.zero_()
-    model.answerability.bias.data.zero_()
-    model.answerability.weight.data[0, tiny_config().d_model] = 1
+    model.evidence.weight.data.zero_()
+    model.evidence.bias.data.zero_()
+    model.evidence.weight.data[0, 0] = 1
+    model.no_answer_logit.data.zero_()
     memory = torch.zeros((2, 3, tiny_config().d_model))
     memory[0, 1, 0] = 1
     memory[1, 1, 0] = 3
     valid = torch.ones((2, 3), dtype=torch.bool)
     context = torch.tensor([[False, True, True], [False, True, True]])
     logits = model.classify_answerability(memory, valid, context)
-    torch.testing.assert_close(logits, torch.tensor([0.5, 1.5]))
+    assert logits[1] > logits[0]
+    positions = model.evidence_position_logits(memory, context)
+    assert positions.shape == (2, 4)
+    assert torch.isneginf(positions[:, 1]).all()
+
+
+def test_evidence_start_loss_uses_null_for_negative_rows() -> None:
+    output = NeedlePointerOutput(
+        torch.empty(0), torch.empty(0), torch.empty(0), torch.empty(0),
+        torch.tensor([[2.0, 1.0, 0.0], [2.0, 0.0, 1.0]]),
+    )
+    loss = evidence_start_loss(output, torch.tensor([[0], [-1]]), torch.tensor([True, False]))
+    torch.testing.assert_close(loss, torch.nn.functional.cross_entropy(output.evidence_position_logits, torch.tensor([1, 0])))
 
 
 def test_backbone_loader_ignores_legacy_answerability_head() -> None:

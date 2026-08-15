@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from .needleish import NeedleConfig, NeedleishModel
@@ -25,6 +27,7 @@ class NeedlePointerOutput:
     copy_position_probs: torch.Tensor
     p_gen: torch.Tensor
     answerability_logits: torch.Tensor | None = None
+    evidence_position_logits: torch.Tensor | None = None
 
     def final_distribution(self, source_ids: torch.Tensor) -> torch.Tensor:
         copy = PointerGenerator.copy_distribution(
@@ -88,20 +91,21 @@ class NeedlePointerModel(NeedleishModel):
         expected = self.state_dict()
         compatible = {name: value for name, value in state.items() if name in expected and expected[name].shape == value.shape}
         missing, unexpected = self.load_state_dict(compatible, strict=False)
-        if unexpected or any(not name.startswith(("pointer.", "answerability.")) for name in missing):
+        optional_heads = ("pointer.", "answerability.", "evidence.", "no_answer_logit")
+        if unexpected or any(not name.startswith(optional_heads) for name in missing):
             raise ValueError(f"Backbone checkpoint mismatch: missing={missing}, unexpected={unexpected}")
 
 
 class NeedleAnswerablePointerModel(NeedlePointerModel):
-    """Pointer-generator with a separate evidence-sufficiency classifier."""
+    """Pointer-generator with a question-conditioned answer-span/no-answer head."""
 
     def __init__(self, cfg: NeedleConfig):
         super().__init__(cfg)
-        self.answerability = nn.Linear(cfg.d_model * 4, 1)
-        # Product features can be much larger than a token embedding. Start at
-        # an unbiased 50/50 refusal decision instead of saturated logits.
-        nn.init.zeros_(self.answerability.weight)
-        nn.init.zeros_(self.answerability.bias)
+        self.evidence = nn.Linear(cfg.d_model, 1)
+        nn.init.zeros_(self.evidence.weight)
+        nn.init.zeros_(self.evidence.bias)
+        # Start roughly neutral for a typical 256-token context.
+        self.no_answer_logit = nn.Parameter(torch.tensor(math.log(256.0)))
 
     def forward(
         self,
@@ -120,21 +124,42 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
             context_mask,
             target_valid,
         )
-        answerability_logits = self.classify_answerability(memory, source_valid, context_mask)
+        evidence_position_logits = self.evidence_position_logits(memory, context_mask)
+        answerability_logits = self.classify_answerability(memory, source_valid, context_mask, evidence_position_logits)
         return NeedlePointerOutput(
             output.vocab_logits,
             output.copy_position_probs,
             output.p_gen,
             answerability_logits,
+            evidence_position_logits,
         )
+
+    def evidence_position_logits(self, memory: torch.Tensor, context_mask: torch.Tensor) -> torch.Tensor:
+        """Scores a context start position, with index zero reserved for no-answer."""
+        positions = self.evidence(memory).squeeze(-1).masked_fill(~context_mask, float("-inf"))
+        return torch.cat((self.no_answer_logit.expand(len(memory), 1), positions), dim=1)
 
     def classify_answerability(
         self,
         memory: torch.Tensor,
         source_valid: torch.Tensor,
         context_mask: torch.Tensor,
+        evidence_position_logits: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return self.answerability(answerability_interaction_features(memory, source_valid, context_mask)).squeeze(-1)
+        del source_valid  # Context already excludes source padding.
+        logits = evidence_position_logits if evidence_position_logits is not None else self.evidence_position_logits(memory, context_mask)
+        return logits[:, 1:].logsumexp(dim=-1) - logits[:, 0]
+
+
+def evidence_start_loss(output: NeedlePointerOutput, gold_copy_positions: torch.Tensor, answerable: torch.Tensor) -> torch.Tensor:
+    """Supervise the exact evidence start, or the no-answer class for negatives."""
+    if output.evidence_position_logits is None:
+        raise ValueError("evidence_start_loss requires NeedleAnswerablePointerModel output")
+    starts = gold_copy_positions[:, 0]
+    if (answerable & starts.lt(0)).any():
+        raise ValueError("answerable rows require a gold first copy position")
+    targets = torch.where(answerable, starts + 1, torch.zeros_like(starts))
+    return F.cross_entropy(output.evidence_position_logits.float(), targets)
 
 
 @dataclass
