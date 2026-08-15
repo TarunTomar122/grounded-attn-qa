@@ -509,3 +509,49 @@ entailment/contradiction/neutral data, then calibrate it on the fixed
 reader-generated QA candidates. This is specifically motivated by Chen et al.'s
 use of standard NLI data together with QA-derived verification examples, rather
 than another small architectural patch.
+
+### N3 isolated-adapter NLI transfer pilot
+
+The next branch preserves N2-PG more strongly than the earlier separate-N2
+cross-encoder pilot. `NeedleVerifierAdapter` freezes every N2-PG parameter and
+adds twelve zero-initialized rank-32 residual encoder adapters plus the existing
+three-way head. The adapter has about 0.4M trainable parameters; before any
+training its verifier-mode encoder output is exactly equal to the reader
+encoder output. The original N2-PG checkpoint and pointer decoder are never
+written by this branch.
+
+Following [Chen, Choi, and Durrett (2021)](https://aclanthology.org/2021.findings-emnlp.324/),
+the first stage was 120,000 SNLI train pairs and all 9,842 usable validation
+pairs. SNLI supplies human-written premise/hypothesis entailment,
+contradiction, and neutral labels (CC-BY-SA-4.0); labels were remapped to this
+project's neutral/refute/support order. After 1,000 steps (W&B `03mw3ir2`),
+held-out support AUC rose from 0.412 to **0.771** and coverage at a 2% false
+support cap rose from 0.09% to **12.08%**. Thus the small isolated branch can
+learn ordinary sentence-level NLI without changing the reader.
+
+It did not transfer directly to the reader's errors: on the held-out
+reader-candidate data it started at support AUC **0.481**. A 1,000-step QA
+specialization (W&B `qvn2aw5z`) increased this to **0.646**, with 6.22% safe
+candidate coverage at 1.57% false accepts. End to end on the already-observed
+N0 diagnostic, its validation-selected threshold accepted only 6/776 outputs:
+97.73% false refusal and 0% false acceptance. It also accepted none of the
+five fixed handwritten probes. This is marginally better ranking than the
+earlier 0.640 NLI pilot, but still not a useful verifier.
+
+We then tested an explicit provenance correction. The old candidate feature
+pooled only copied answer tokens: for the bad answer `41`, it saw `41`, not the
+local evidence `South Pier listed 41 red lanterns.` The revised path pools a
+32-token window around the pointer-matched candidate. It improved zero-shot
+SNLI-to-reader AUC from 0.481 to **0.555**, confirming local evidence carries
+useful information. However, after 500 QA-specialization steps (W&B
+`ronvqb63`), validation AUC was only **0.617** and safe coverage 3.63%; its
+N0 gate accepted 5/776 and again accepted none of the handwritten valid cases.
+
+The diagnosis is now narrower. Standard NLI uses a declarative hypothesis,
+whereas the QA path gives the encoder the non-NLI prompt `Question: ...\nCandidate
+answer: ...`. It is not enough for a model to know that an evidence sentence
+entails a claim; it must first represent *the candidate as the answer to this
+particular question*. The next experiment should therefore test a
+question-to-claim formulation (and validate its semantic fidelity) before
+spending another long adapter run. Extending either current curriculum would
+repeat a proven low-coverage regime.
