@@ -9,6 +9,7 @@ from torch import nn
 
 from grounded_qa.negatives import REFUSAL
 from grounded_qa.needle_pointer import NeedlePointerModel, answerability_interaction_features, candidate_span_features, candidate_verifier_head
+from grounded_qa.needle_verifier import NeedleVerifierAdapter
 from grounded_qa.needle_qa_data import _evidence_window
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig
@@ -47,6 +48,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--hidden-dim", type=int, default=0, help="Verifier hidden width; must match the head checkpoint.")
     parser.add_argument("--nli", action="store_true", help="Use a support/refute/neutral verifier checkpoint.")
+    parser.add_argument("--adapter-rank", type=int, default=0, help="Load a frozen-reader verification adapter from an NLI checkpoint.")
     args = parser.parse_args()
 
     report = json.loads(args.input.read_text())
@@ -56,7 +58,10 @@ def main() -> None:
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
     model = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=dtype)
     model.load_backbone_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
-    model.eval()
+    encoder = NeedleVerifierAdapter(model, args.adapter_rank).to(device=device, dtype=dtype) if args.adapter_rank else model
+    if args.adapter_rank:
+        encoder.adapters.load_state_dict(torch.load(args.head, map_location=device, weights_only=False)["adapter"])
+    encoder.eval()
     head = (
         nn.Sequential(nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, args.hidden_dim), nn.GELU(), nn.Linear(args.hidden_dim, 3))
         if args.nli
@@ -90,7 +95,7 @@ def main() -> None:
             valid[row_index, : len(ids)] = True
             context[row_index, context_start : len(ids)] = True
             candidate[row_index, candidate_start:candidate_end] = True
-        memory = model.encode(source, valid)
+        memory = encoder.encode(source, valid)
         scores = (
             head(candidate_span_features(memory, valid, valid & ~context, candidate)).softmax(dim=-1)[:, 2]
             if args.nli
