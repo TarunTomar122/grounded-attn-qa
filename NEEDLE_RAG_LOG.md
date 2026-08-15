@@ -598,3 +598,20 @@ architecture experiment should use a small verification-only decoder-adapter
 path and classify its one-token cross-attended state against the pointer-local
 evidence window. This is a new information route, not another pooled-head or
 format repetition.
+
+### N3 decoder cross-attention verifier smoke gate
+
+The decoder alternative was implemented as a distinct, still lightweight path:
+twelve rank-32 encoder adapters plus eight rank-32 decoder adapters, with the
+reader frozen. A single BOS verification token cross-attends only to the query
+and pointer-local evidence window, then feeds the same 3-way classifier. At
+initialization its output exactly matches the frozen N2 decoder on the same
+input; the test prevents an accidental reader change.
+
+It did not clear the general-NLI prerequisite. After 500 SNLI steps (W&B
+`3dlomo4a`), support AUC was only **0.6088** and safe coverage **0.39%** at
+0.15% false support, versus the encoder-adapter's 0.7448 AUC and 9.70% safe
+coverage at the same step. The run was not transferred to QA. This rules out
+the simple one-token decoder-cross-attention formulation; the reader's decoder
+is useful for answer generation but is not an immediately better verifier
+representation under isolated adaptation.
