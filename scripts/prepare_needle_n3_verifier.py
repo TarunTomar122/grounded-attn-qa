@@ -21,9 +21,13 @@ def verifier_query(question: str, candidate: str) -> str:
     return f"Question: {question}\nCandidate answer: {candidate}\nIs this candidate supported by the context?"
 
 
+def nli_claim_query(claim: str) -> str:
+    return f"Claim: {claim}\nDoes the evidence support, contradict, or leave this claim unknown?"
+
+
 def verifier_claim(question: str, candidate: str) -> str:
     """A stable QA-to-NLI bridge; richer conversion is evaluated separately."""
-    return f'Claim: The answer to the question "{question}" is "{candidate}".'
+    return nli_claim_query(f'The answer to the question "{question}" is "{candidate}".')
 
 
 def normalized(text: str) -> str:

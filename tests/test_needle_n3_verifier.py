@@ -8,7 +8,7 @@ def test_verifier_query_contains_question_and_candidate() -> None:
 
 
 def test_verifier_claim_binds_candidate_to_question() -> None:
-    assert verifier_claim("Who arrived?", "Rhea") == 'Claim: The answer to the question "Who arrived?" is "Rhea".'
+    assert verifier_claim("Who arrived?", "Rhea") == 'Claim: The answer to the question "Who arrived?" is "Rhea".\nDoes the evidence support, contradict, or leave this claim unknown?'
 
 
 def test_distractor_excludes_gold_answer() -> None:

@@ -64,6 +64,8 @@ def evaluate(model: nn.Module, verifier: nn.Module, data: dict[str, torch.Tensor
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fine-tune a separate N2-initialized support/refute/neutral verifier.")
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--replay-data-dir", type=Path, help="Optional equally sampled second verifier format for adapter specialization.")
+    parser.add_argument("--validation-data-dir", type=Path, help="Optional deployment-format validation split.")
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=2_000)
@@ -82,7 +84,9 @@ def main() -> None:
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     device = torch.device("cuda")
-    train, validation = load_split(args.data_dir, "train"), load_split(args.data_dir, "validation")
+    train = load_split(args.data_dir, "train")
+    replay_train = load_split(args.replay_data_dir, "train") if args.replay_data_dir else None
+    validation = load_split(args.validation_data_dir or args.data_dir, "validation")
     if "nli_label" not in train or "nli_label" not in validation:
         raise ValueError("NLI verifier data requires support/refute/neutral labels")
     reader = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=torch.bfloat16)
@@ -119,8 +123,9 @@ def main() -> None:
     model.train()
     started = time.perf_counter()
     for step in range(1, args.steps + 1):
-        indices = torch.randint(len(train["source_ids"]), (args.batch_size,), generator=generator)
-        logits, labels = scores(model, verifier, train, indices, device)
+        active_train = replay_train if replay_train is not None and torch.rand((), generator=generator).item() < 0.5 else train
+        indices = torch.randint(len(active_train["source_ids"]), (args.batch_size,), generator=generator)
+        logits, labels = scores(model, verifier, active_train, indices, device)
         loss = F.cross_entropy(logits.float(), labels, weight=class_weight)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()

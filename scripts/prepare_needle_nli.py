@@ -12,7 +12,7 @@ from datasets import load_dataset
 
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, sha256
-from scripts.prepare_needle_n3_verifier import tensorize
+from scripts.prepare_needle_n3_verifier import nli_claim_query, tensorize
 
 
 LABELS = {"neutral": 0, "contradiction": 1, "entailment": 2}
@@ -20,7 +20,7 @@ SNLI_LABELS = {0: 2, 1: 0, 2: 1}  # dataset IDs: entailment, neutral, contradict
 
 
 def nli_query(claim: str) -> str:
-    return f"Claim: {claim}\nDoes the evidence support, contradict, or leave this claim unknown?"
+    return nli_claim_query(claim)
 
 
 def label_id(label: int | str) -> int | None:

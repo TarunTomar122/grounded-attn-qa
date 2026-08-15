@@ -15,7 +15,7 @@ from grounded_qa.needle_tokenizer import NeedleTokenizer
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, sha256
 from scripts.prepare_needle_n3_matched import split_for_context
 from scripts.convert_qa2d import claim_key
-from scripts.prepare_needle_n3_verifier import normalized, tensorize, verifier_claim, verifier_query
+from scripts.prepare_needle_n3_verifier import nli_claim_query, normalized, tensorize, verifier_claim, verifier_query
 
 
 def is_supported_candidate(row: dict) -> bool:
@@ -110,13 +110,14 @@ def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path]
                 stats["nonliteral_candidate"] += 1
                 continue
             if claims is not None:
-                query = claims.get(claim_key(row["question"], candidate))
-                if query is None:
+                statement = claims.get(claim_key(row["question"], candidate))
+                if statement is None:
                     stats["missing_claim"] += 1
                     continue
-                if not usable_claim(row["question"], candidate, query):
+                if not usable_claim(row["question"], candidate, statement):
                     stats["invalid_claim"] += 1
                     continue
+                query = nli_claim_query(statement)
             else:
                 query = verifier_claim(row["question"], candidate) if claim else verifier_query(row["question"], candidate)
             window = _evidence_window(
