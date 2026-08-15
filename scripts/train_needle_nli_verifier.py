@@ -30,7 +30,7 @@ def nli_metrics(logits: torch.Tensor, labels: torch.Tensor) -> dict[str, float]:
     }
 
 
-def scores(model: nn.Module, verifier: nn.Module, data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+def scores(model: nn.Module, verifier: nn.Module, data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.device, *, decoder_verifier: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
     source = data["source_ids"][indices].to(device=device, dtype=torch.long)
     lengths = data["source_lengths"][indices].to(device=device, dtype=torch.long)
     context_start = data["context_start"][indices].to(device=device, dtype=torch.long)
@@ -47,15 +47,15 @@ def scores(model: nn.Module, verifier: nn.Module, data: dict[str, torch.Tensor],
         candidate = valid & (positions >= candidate_start[:, None]) & (positions < candidate_end[:, None])
     else:
         candidate = valid & ~question
-    features = candidate_span_features(model.encode(source, valid), valid, question, candidate)
+    features = model.verify(source, valid, question | candidate) if decoder_verifier else candidate_span_features(model.encode(source, valid), valid, question, candidate)
     return verifier(features), data["nli_label"][indices].to(device=device, dtype=torch.long)
 
 
 @torch.inference_mode()
-def evaluate(model: nn.Module, verifier: nn.Module, data: dict[str, torch.Tensor], device: torch.device, batch_size: int) -> dict[str, float]:
+def evaluate(model: nn.Module, verifier: nn.Module, data: dict[str, torch.Tensor], device: torch.device, batch_size: int, *, decoder_verifier: bool = False) -> dict[str, float]:
     logits, labels = [], []
     for start in range(0, len(data["source_ids"]), batch_size):
-        prediction, target = scores(model, verifier, data, torch.arange(start, min(start + batch_size, len(data["source_ids"]))), device)
+        prediction, target = scores(model, verifier, data, torch.arange(start, min(start + batch_size, len(data["source_ids"]))), device, decoder_verifier=decoder_verifier)
         logits.append(prediction.float().cpu())
         labels.append(target.cpu())
     return nli_metrics(torch.cat(logits), torch.cat(labels))
@@ -75,6 +75,7 @@ def main() -> None:
     parser.add_argument("--head-lr", type=float, default=1.0e-4)
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--adapter-rank", type=int, default=0, help="Enable isolated verifier adapters; zero reproduces the legacy full-backbone pilot.")
+    parser.add_argument("--decoder-verifier", action="store_true", help="Classify a decoder cross-attended verification token rather than pooled encoder features.")
     parser.add_argument("--init", type=Path, help="Optional earlier adapter/head checkpoint, for NLI-to-QA specialization.")
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--wandb", action="store_true")
@@ -91,15 +92,19 @@ def main() -> None:
         raise ValueError("NLI verifier data requires support/refute/neutral labels")
     reader = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=torch.bfloat16)
     reader.load_backbone_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
-    model: nn.Module = NeedleVerifierAdapter(reader, args.adapter_rank).to(device=device, dtype=torch.bfloat16) if args.adapter_rank else reader
+    if args.decoder_verifier and not args.adapter_rank:
+        raise ValueError("decoder verifier requires adapter-rank")
+    model: nn.Module = NeedleVerifierAdapter(reader, args.adapter_rank, decoder=args.decoder_verifier).to(device=device, dtype=torch.bfloat16) if args.adapter_rank else reader
     verifier = nn.Sequential(
-        nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, args.hidden_dim), nn.GELU(), nn.Linear(args.hidden_dim, 3)
+        nn.Linear(NeedleConfig.public_checkpoint().d_model if args.decoder_verifier else NeedleConfig.public_checkpoint().d_model * 4, args.hidden_dim), nn.GELU(), nn.Linear(args.hidden_dim, 3)
     ).to(device=device, dtype=torch.bfloat16)
     if args.init:
         state = torch.load(args.init, map_location=device, weights_only=False)
         verifier.load_state_dict(state["verifier"])
         if args.adapter_rank:
             model.adapters.load_state_dict(state["adapter"])  # type: ignore[union-attr]
+            if args.decoder_verifier:
+                model.decoder_adapters.load_state_dict(state["decoder_adapter"])  # type: ignore[union-attr]
         elif "model" in state:
             model.load_state_dict(state["model"])
     counts = torch.bincount(train["nli_label"], minlength=3).float()
@@ -116,7 +121,7 @@ def main() -> None:
 
         run = wandb.init(project="grounded-attn-qa", group="needle-rag", name=args.run_name, config={**vars(args), "train_rows": len(train["source_ids"]), "validation_rows": len(validation["source_ids"]), "class_counts": counts.tolist()})
     model.eval()
-    initial = evaluate(model, verifier, validation, device, args.batch_size)
+    initial = evaluate(model, verifier, validation, device, args.batch_size, decoder_verifier=args.decoder_verifier)
     print(json.dumps({"step": 0, **initial}), flush=True)
     if run:
         run.log(initial, step=0)
@@ -125,7 +130,7 @@ def main() -> None:
     for step in range(1, args.steps + 1):
         active_train = replay_train if replay_train is not None and torch.rand((), generator=generator).item() < 0.5 else train
         indices = torch.randint(len(active_train["source_ids"]), (args.batch_size,), generator=generator)
-        logits, labels = scores(model, verifier, active_train, indices, device)
+        logits, labels = scores(model, verifier, active_train, indices, device, decoder_verifier=args.decoder_verifier)
         loss = F.cross_entropy(logits.float(), labels, weight=class_weight)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -138,7 +143,7 @@ def main() -> None:
                 run.log(metrics, step=step)
         if step % args.eval_every == 0 or step == args.steps:
             model.eval()
-            metrics = evaluate(model, verifier, validation, device, args.batch_size)
+            metrics = evaluate(model, verifier, validation, device, args.batch_size, decoder_verifier=args.decoder_verifier)
             print(json.dumps({"step": step, **metrics}), flush=True)
             if run:
                 run.log(metrics, step=step)
@@ -146,6 +151,8 @@ def main() -> None:
             checkpoint = {"verifier": verifier.state_dict(), "step": step, "args": vars(args)}
             if args.adapter_rank:
                 checkpoint["adapter"] = model.adapters.state_dict()  # type: ignore[union-attr]
+                if args.decoder_verifier:
+                    checkpoint["decoder_adapter"] = model.decoder_adapters.state_dict()  # type: ignore[union-attr]
             else:
                 checkpoint["model"] = model.state_dict()
             torch.save(checkpoint, args.output_dir / f"step-{step:06d}.pt")

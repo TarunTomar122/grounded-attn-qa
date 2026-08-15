@@ -49,6 +49,7 @@ def main() -> None:
     parser.add_argument("--hidden-dim", type=int, default=0, help="Verifier hidden width; must match the head checkpoint.")
     parser.add_argument("--nli", action="store_true", help="Use a support/refute/neutral verifier checkpoint.")
     parser.add_argument("--adapter-rank", type=int, default=0, help="Load a frozen-reader verification adapter from an NLI checkpoint.")
+    parser.add_argument("--decoder-verifier", action="store_true", help="Use the adapter's decoder cross-attended verification token.")
     parser.add_argument("--evidence-radius", type=int, default=0, help="Include this many source tokens around the copied span as verifier evidence.")
     parser.add_argument("--claim", action="store_true", help="Render question/candidate as the declarative claim used by NLI training.")
     args = parser.parse_args()
@@ -60,14 +61,17 @@ def main() -> None:
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
     model = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=dtype)
     model.load_backbone_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
-    encoder = NeedleVerifierAdapter(model, args.adapter_rank).to(device=device, dtype=dtype) if args.adapter_rank else model
+    encoder = NeedleVerifierAdapter(model, args.adapter_rank, decoder=args.decoder_verifier).to(device=device, dtype=dtype) if args.adapter_rank else model
     if args.adapter_rank:
-        encoder.adapters.load_state_dict(torch.load(args.head, map_location=device, weights_only=False)["adapter"])
+        adapter_state = torch.load(args.head, map_location=device, weights_only=False)
+        encoder.adapters.load_state_dict(adapter_state["adapter"])
+        if args.decoder_verifier:
+            encoder.decoder_adapters.load_state_dict(adapter_state["decoder_adapter"])
     encoder.eval()
     state = load_verifier_state(args.head, device) if args.nli else load_head_state(args.head, device)
     hidden_dim = state["0.weight"].shape[0] if args.nli and not args.hidden_dim else args.hidden_dim
     head = (
-        nn.Sequential(nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, 3))
+        nn.Sequential(nn.Linear(NeedleConfig.public_checkpoint().d_model if args.decoder_verifier else NeedleConfig.public_checkpoint().d_model * 4, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, 3))
         if args.nli
         else candidate_verifier_head(NeedleConfig.public_checkpoint().d_model, hidden_dim)
     ).to(device=device, dtype=dtype)
@@ -101,9 +105,9 @@ def main() -> None:
             valid[row_index, : len(ids)] = True
             context[row_index, context_start : len(ids)] = True
             candidate[row_index, candidate_start:candidate_end] = True
-        memory = encoder.encode(source, valid)
+        memory = encoder.encode(source, valid) if not args.decoder_verifier else None
         scores = (
-            head(candidate_span_features(memory, valid, valid & ~context, candidate)).softmax(dim=-1)[:, 2]
+            head(encoder.verify(source, valid, (valid & ~context) | candidate) if args.decoder_verifier else candidate_span_features(memory, valid, valid & ~context, candidate)).softmax(dim=-1)[:, 2]
             if args.nli
             else head(answerability_interaction_features(memory, valid, context)).squeeze(-1).sigmoid()
         ).float().cpu().tolist()
