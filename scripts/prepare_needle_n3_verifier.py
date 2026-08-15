@@ -35,7 +35,7 @@ def distractor(context: str, answer: str, rng: random.Random) -> tuple[str, int]
         start = rng.randrange(len(words) - answer_words + 1)
         candidate = context[words[start].start() : words[start + answer_words - 1].end()]
         candidate_key = normalized(candidate)
-        if candidate_key and candidate_key not in answer_key and answer_key not in candidate_key:
+        if candidate_key and (not answer_key or (candidate_key not in answer_key and answer_key not in candidate_key)):
             return candidate, words[start].start()
     return None
 

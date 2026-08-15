@@ -11,3 +11,7 @@ def test_distractor_excludes_gold_answer() -> None:
     value = distractor("Rhea arrived at noon beside the old gate.", "Rhea", random.Random(4))
     assert value is not None
     assert "rhea" not in value[0].lower()
+
+
+def test_distractor_allows_empty_answer_for_unanswerable_questions() -> None:
+    assert distractor("Rhea arrived at noon.", "", random.Random(4)) is not None
