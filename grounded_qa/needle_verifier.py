@@ -5,7 +5,21 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from .needle_pointer import NeedlePointerModel
+from .needle_pointer import NeedlePointerModel, candidate_span_features
+
+
+def joint_verifier_logits(
+    reader: NeedlePointerModel,
+    verifier: nn.Module,
+    source_ids: torch.Tensor,
+    source_valid: torch.Tensor,
+    question_mask: torch.Tensor,
+    candidate_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Classify a candidate while allowing verifier gradients into the shared reader."""
+    memory = reader.encode(source_ids, source_valid)
+    features = candidate_span_features(memory, source_valid, question_mask, candidate_mask)
+    return verifier(features)
 
 
 class ResidualAdapter(nn.Module):
