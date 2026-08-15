@@ -80,7 +80,7 @@ def write_reader_inputs(tokenizer_path: Path, output_dir: Path) -> None:
 
 def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path], output_dir: Path) -> None:
     tokenizer = NeedleTokenizer(tokenizer_path, append_markers=False)
-    rows: dict[str, list[tuple[list[int], int, bool]]] = {"train": [], "validation": []}
+    rows: dict[str, list[tuple[list[int], int, bool, int, int]]] = {"train": [], "validation": []}
     stats = defaultdict(int)
     for report_path in report_paths:
         report = json.loads(report_path.read_text())
@@ -104,9 +104,15 @@ def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path]
             if window is None:
                 stats["window_too_long"] += 1
                 continue
-            ids, _, _, context_start, _ = window
+            ids, _, candidate_positions, context_start, _ = window
             supported = is_supported_candidate(row)
-            rows[row["split"]].append((ids, context_start, supported))
+            rows[row["split"]].append((
+                ids,
+                context_start,
+                supported,
+                context_start + candidate_positions[0],
+                context_start + candidate_positions[-1] + 1,
+            ))
             stats["supported" if supported else "unsupported"] += 1
             stats["answerable" if row["answerable"] else "unanswerable"] += 1
 
@@ -118,7 +124,9 @@ def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path]
         "splits": {},
     }
     for split, examples in rows.items():
-        tensors = tensorize(examples)
+        tensors = tensorize([(ids, context_start, label) for ids, context_start, label, _, _ in examples])
+        tensors["candidate_start"] = torch.tensor([start for _, _, _, start, _ in examples], dtype=torch.int32)
+        tensors["candidate_end"] = torch.tensor([end for _, _, _, _, end in examples], dtype=torch.int32)
         path = output_dir / f"n3-reader-candidates-{split}.pt"
         torch.save(tensors, path)
         manifest["splits"][split] = {

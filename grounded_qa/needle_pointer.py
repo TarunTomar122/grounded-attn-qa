@@ -11,14 +11,27 @@ from .needleish import NeedleConfig, NeedleishModel
 from .pointer import PointerGenerator
 
 
+def _masked_mean(memory: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    return (memory * mask[..., None]).sum(dim=1) / mask.sum(dim=1, keepdim=True).clamp_min(1)
+
+
 def answerability_interaction_features(
     memory: torch.Tensor, source_valid: torch.Tensor, context_mask: torch.Tensor
 ) -> torch.Tensor:
     """Linear-readout features that retain both question and context summaries."""
     question_mask = source_valid & ~context_mask
-    question = (memory * question_mask[..., None]).sum(dim=1) / question_mask.sum(dim=1, keepdim=True).clamp_min(1)
-    context = (memory * context_mask[..., None]).sum(dim=1) / context_mask.sum(dim=1, keepdim=True).clamp_min(1)
+    question = _masked_mean(memory, question_mask)
+    context = _masked_mean(memory, context_mask)
     return torch.cat((question, context, question * context, (question - context).abs()), dim=-1)
+
+
+def candidate_span_features(
+    memory: torch.Tensor, source_valid: torch.Tensor, question_mask: torch.Tensor, candidate_mask: torch.Tensor
+) -> torch.Tensor:
+    """Read the jointly encoded question against the exact proposed source span."""
+    question = _masked_mean(memory, source_valid & question_mask)
+    candidate = _masked_mean(memory, source_valid & candidate_mask)
+    return torch.cat((question, candidate, question * candidate, (question - candidate).abs()), dim=-1)
 
 
 @dataclass

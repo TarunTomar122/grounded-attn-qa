@@ -9,14 +9,14 @@ import torch.nn.functional as F
 from torch import nn
 
 from grounded_qa.calibration import choose_threshold, sweep_thresholds
-from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, answerability_interaction_features
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, answerability_interaction_features, candidate_span_features
 from grounded_qa.needleish import NeedleConfig
 from scripts.analyze_pointer_confidence import binary_auc
 from scripts.train_needle_n1 import load_split
 
 
 @torch.no_grad()
-def encode_features(model, data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.device, batch_size: int) -> torch.Tensor:
+def encode_features(model, data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.device, batch_size: int, candidate_span: bool) -> torch.Tensor:
     features = []
     for start in range(0, len(indices), batch_size):
         selected = indices[start : start + batch_size]
@@ -26,7 +26,14 @@ def encode_features(model, data: dict[str, torch.Tensor], indices: torch.Tensor,
         positions = torch.arange(source.shape[1], device=device)[None]
         valid = positions < lengths[:, None]
         context = (positions >= starts[:, None]) & valid
-        features.append(answerability_interaction_features(model.encode(source, valid), valid, context).float().cpu())
+        memory = model.encode(source, valid)
+        if candidate_span:
+            candidate_start = data["candidate_start"][selected].to(device=device, dtype=torch.long)
+            candidate_end = data["candidate_end"][selected].to(device=device, dtype=torch.long)
+            candidate = valid & (positions >= candidate_start[:, None]) & (positions < candidate_end[:, None])
+            features.append(candidate_span_features(memory, valid, ~context, candidate).float().cpu())
+        else:
+            features.append(answerability_interaction_features(memory, valid, context).float().cpu())
     return torch.cat(features)
 
 
@@ -59,12 +66,15 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=3.0e-3)
     parser.add_argument("--seed", type=int, default=43)
+    parser.add_argument("--candidate-span", action="store_true", help="Pool the proposed context candidate rather than all context tokens.")
     parser.add_argument("--slice", action="append", default=[], help="Named validation range, e.g. official:123:456")
     args = parser.parse_args()
 
     train, validation = load_split(args.data_dir, "train"), load_split(args.data_dir, "validation")
     if "answerable" not in train or "answerable" not in validation:
         raise ValueError("interaction gate requires answerability labels")
+    if args.candidate_span and ({"candidate_start", "candidate_end"} - train.keys() or {"candidate_start", "candidate_end"} - validation.keys()):
+        raise ValueError("candidate-span probe requires candidate source bounds")
     if not 0 < args.train_rows <= len(train["source_ids"]):
         raise ValueError("train rows must be between one and available training rows")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -77,8 +87,8 @@ def main() -> None:
     generator = torch.Generator().manual_seed(args.seed)
     train_indices = torch.randperm(len(train["source_ids"]), generator=generator)[: args.train_rows]
     validation_indices = torch.arange(len(validation["source_ids"]))
-    train_features = encode_features(model, train, train_indices, device, args.feature_batch_size)
-    validation_features = encode_features(model, validation, validation_indices, device, args.feature_batch_size)
+    train_features = encode_features(model, train, train_indices, device, args.feature_batch_size, args.candidate_span)
+    validation_features = encode_features(model, validation, validation_indices, device, args.feature_batch_size, args.candidate_span)
     train_labels = train["answerable"][train_indices].float()
     validation_labels = validation["answerable"].bool()
 
@@ -110,7 +120,7 @@ def main() -> None:
     report = {
         "checkpoint": str(args.checkpoint),
         "train_rows": args.train_rows,
-        "features": "[question_mean, context_mean, product, absolute_difference]",
+        "features": "[question_mean, candidate_span_mean, product, absolute_difference]" if args.candidate_span else "[question_mean, context_mean, product, absolute_difference]",
         "summary": summary,
         "slices": slices,
     }
