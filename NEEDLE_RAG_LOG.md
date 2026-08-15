@@ -483,3 +483,29 @@ so the next work is a dedicated, trainable NLI-style cross-encoder verifier
 over question, candidate, and local evidence. It will use the already-created
 reader-generated candidates, explicit support/refute/neutral labels, and a
 context-disjoint calibration split; it will not update N2's copying weights.
+
+### N3 trainable NLI verifier pilot
+
+The dedicated verifier was initialized from N2 but trained separately, so no
+reader or pointer weights in the deployed N2 checkpoint were changed. Reader
+candidate labels were made explicit: exact answer match is **support**, a wrong
+candidate for an answerable question is **refute**, and a candidate for an
+unanswerable question is **neutral**. This gives the verifier 3,764 / 4,440 /
+8,190 support/refute/neutral train examples and 193 / 221 / 415 validation
+examples.
+
+Its 500-step W&B pilot (`kayqe3px`) improved support AUC from 0.509 to 0.602
+and safe coverage from 0% to 3.63%. The fixed 2,000-step run (`oxhn4o3v`)
+continued to AUC **0.6402**, but only **4.66%** safe coverage at 1.57% false
+accepts. End-to-end at that context-disjoint threshold it accepted 5 of 776 N0
+candidates (98.11% false refusal) and 0 of 5 handwritten answers.
+
+This is a useful negative result: a trainable 26M candidate-span cross-encoder
+can learn some reader-output support ranking, but QA-derived labels alone do
+not provide the language-entailment competence needed for the product decision.
+The next verifier curriculum will follow the evidence-verification literature
+more faithfully: first train the separate verifier on standard NLI
+entailment/contradiction/neutral data, then calibrate it on the fixed
+reader-generated QA candidates. This is specifically motivated by Chen et al.'s
+use of standard NLI data together with QA-derived verification examples, rather
+than another small architectural patch.
