@@ -338,3 +338,38 @@ calibration distribution demonstrably matched to deployment negatives; another
 longer run of the same standalone answerability head is not warranted. The N0
 slice has now been inspected during development and must no longer be presented
 as a final untouched result.
+
+### N3 paragraph-matched natural-QA control
+
+To remove context-style shortcuts, `scripts/prepare_needle_n3_matched.py`
+formed answerable/unanswerable pairs from the same SQuAD2 *train* paragraph.
+Contexts were split deterministically by SHA-256, so no paragraph appears in
+both splits. The resulting train split has 8,267 matched paragraphs (16,534
+rows) and validation has 419 paragraphs (838 rows); every split is exactly
+balanced. The manifest is
+`/root/autodl-tmp/datasets/n3-matched/n3-matched-manifest.json` on the remote
+volume and records the upstream dataset revision and tensor hashes.
+
+This control gave a clear negative result. A frozen B7 reader plus a linear
+question/context/product/difference sidecar only reached AUC 0.7444 and 10.98%
+safe answer coverage at 1.91% false answers. Training the existing
+question-only answerability head for 500 steps improved matched validation
+coverage only from 8.59% to 12.89% (1.91% false answers) and made the observed
+N0 diagnostic worse: 95.08% false refusals at its matched-validation threshold.
+
+Replacing the model head with the same explicit interaction features did not
+change that conclusion. The first 500-step run used an unsuitable random
+initialization that saturated product-feature logits, then recovered to 11.69%
+safe coverage. The corrected zero-logit initialization began neutrally and
+reached only 10.26% safe coverage after 500 steps. It was stopped at its saved
+checkpoint rather than extending a regressing curve. Pointer grounding stayed
+healthy throughout (about 90--92% validation source-position accuracy), so the
+failure is the evidence-sufficiency decision rather than copy provenance.
+
+The interaction architecture and backward-compatible checkpoint loading are in
+commits `2a4793b` and `4e4f032`; tests passed 78/78. W&B runs are
+`wlgpj887` (question-only), `oq3ay0oa` (interaction diagnostic), and
+`3upq5lae` (zero-init interaction). The next intervention must score a
+specific retrieved answer span against the question, rather than classify only
+pooled encoder summaries. Repeating this matched-data curriculum with the
+current pooled classifier is not justified.
