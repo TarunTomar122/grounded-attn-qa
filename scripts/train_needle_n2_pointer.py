@@ -385,10 +385,12 @@ def main() -> None:
         indices = order[start : start + args.batch_size]
         source, source_valid, context_mask, decoder, target, valid, gold, answerable = batch(train, indices, device)
         adam_lr, muon_lr = lr_at(step, total_steps, args.lr), lr_at(step, total_steps, args.muon_lr)
-        for group in optimizers["adam"].param_groups:
-            group["lr"] = adam_lr
-        for group in optimizers["muon"].param_groups:
-            group["lr"] = muon_lr
+        for name, rate in (("adam", adam_lr), ("muon", muon_lr)):
+            optimizer = optimizers.get(name)
+            if optimizer is None:
+                continue
+            for group in optimizer.param_groups:
+                group["lr"] = rate
         for optimizer in optimizers.values():
             optimizer.zero_grad(set_to_none=True)
         output = model(source, source_valid, context_mask, decoder, valid)
