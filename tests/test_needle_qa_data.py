@@ -19,6 +19,7 @@ from scripts.prepare_needle_n2 import SOURCE_LENGTH, TARGET_LENGTH, tensorize
 from scripts.prepare_needle_n3 import cross_pair_negatives
 from scripts.prepare_needle_n3_entity import prepare_entity_binding_pairs, prepare_relation_binding_pairs
 from scripts.prepare_needle_n3_official import partition_tensor_rows, select_tensor_rows
+from scripts.prepare_needle_n3_matched import matched_squad2_pairs, split_for_context
 
 
 @dataclass
@@ -262,6 +263,22 @@ class NeedleQADataTests(unittest.TestCase):
         self.assertEqual(len(train["source_ids"]), 8)
         self.assertEqual(len(development["source_ids"]), 2)
         self.assertFalse(set(train["source_ids"][:, 0].tolist()) & set(development["source_ids"][:, 0].tolist()))
+
+    def test_matched_squad_pairs_share_a_context_and_keep_labels_balanced(self) -> None:
+        tokenizer = FakeTokenizer()
+        context = "Paris is the capital of France."
+        prepared, stats = matched_squad2_pairs([
+            {"question": "What is France's capital?", "context": context, "answers": {"text": ["Paris"], "answer_start": [0]}},
+            {"question": "Who was France's monarch?", "context": context, "answers": {"text": [], "answer_start": []}},
+        ], tokenizer)
+
+        rows = prepared[split_for_context(context)]
+        self.assertEqual(stats["matched_paragraphs"], 1)
+        self.assertEqual([label for _, label in rows], [True, False])
+        self.assertEqual(
+            rows[0][0].source_ids[rows[0][0].context_start :],
+            rows[1][0].source_ids[rows[1][0].context_start :],
+        )
 
 
 if __name__ == "__main__":
