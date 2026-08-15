@@ -37,7 +37,11 @@ def scores(model: nn.Module, verifier: nn.Module, data: dict[str, torch.Tensor],
     positions = torch.arange(source.shape[1], device=device)[None]
     valid = positions < lengths[:, None]
     question = valid & (positions < context_start[:, None])
-    if "candidate_start" in data:
+    if "evidence_start" in data:
+        evidence_start = data["evidence_start"][indices].to(device=device, dtype=torch.long)
+        evidence_end = data["evidence_end"][indices].to(device=device, dtype=torch.long)
+        candidate = valid & (positions >= evidence_start[:, None]) & (positions < evidence_end[:, None])
+    elif "candidate_start" in data:
         candidate_start = data["candidate_start"][indices].to(device=device, dtype=torch.long)
         candidate_end = data["candidate_end"][indices].to(device=device, dtype=torch.long)
         candidate = valid & (positions >= candidate_start[:, None]) & (positions < candidate_end[:, None])

@@ -49,6 +49,7 @@ def main() -> None:
     parser.add_argument("--hidden-dim", type=int, default=0, help="Verifier hidden width; must match the head checkpoint.")
     parser.add_argument("--nli", action="store_true", help="Use a support/refute/neutral verifier checkpoint.")
     parser.add_argument("--adapter-rank", type=int, default=0, help="Load a frozen-reader verification adapter from an NLI checkpoint.")
+    parser.add_argument("--evidence-radius", type=int, default=0, help="Include this many source tokens around the copied span as verifier evidence.")
     args = parser.parse_args()
 
     report = json.loads(args.input.read_text())
@@ -83,7 +84,9 @@ def main() -> None:
         window = _evidence_window(tokenizer, query, row["context"], offset, offset + len(candidate), max_source_length=SOURCE_LENGTH)
         if window is not None:
             candidate_positions = window[2]
-            eligible.append((index, window[0], window[3], window[3] + candidate_positions[0], window[3] + candidate_positions[-1] + 1))
+            candidate_start = window[3] + candidate_positions[0]
+            candidate_end = window[3] + candidate_positions[-1] + 1
+            eligible.append((index, window[0], window[3], max(window[3], candidate_start - args.evidence_radius), min(len(window[0]), candidate_end + args.evidence_radius)))
 
     for start in range(0, len(eligible), args.batch_size):
         batch = eligible[start : start + args.batch_size]

@@ -135,6 +135,8 @@ def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path]
         tensors = tensorize([(ids, context_start, label) for ids, context_start, label, _, _, _ in examples])
         tensors["candidate_start"] = torch.tensor([start for _, _, _, start, _, _ in examples], dtype=torch.int32)
         tensors["candidate_end"] = torch.tensor([end for _, _, _, _, end, _ in examples], dtype=torch.int32)
+        tensors["evidence_start"] = torch.tensor([max(context_start, start - 32) for _, context_start, _, start, _, _ in examples], dtype=torch.int32)
+        tensors["evidence_end"] = torch.tensor([min(len(ids), end + 32) for ids, _, _, _, end, _ in examples], dtype=torch.int32)
         tensors["nli_label"] = torch.tensor([label for _, _, _, _, _, label in examples], dtype=torch.int64)
         path = output_dir / f"n3-reader-candidates-{split}.pt"
         torch.save(tensors, path)

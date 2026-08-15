@@ -79,6 +79,8 @@ def main() -> None:
                 if len(labels) == len(rows):
                     break
         tensors["nli_label"] = torch.tensor(labels, dtype=torch.int64)
+        tensors["evidence_start"] = tensors["context_start"].clone()
+        tensors["evidence_end"] = tensors["source_lengths"].clone()
         path = args.output_dir / f"nli-snli-{split}.pt"
         torch.save(tensors, path)
         manifest["splits"][split] = {"stats": stats, "class_counts": torch.bincount(tensors["nli_label"], minlength=3).tolist(), "file": {"path": path.name, "bytes": path.stat().st_size, "sha256": sha256(path)}}
