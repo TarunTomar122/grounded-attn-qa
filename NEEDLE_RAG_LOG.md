@@ -447,3 +447,24 @@ context-disjoint calibration split. This is the direct missing component in our
 implementation and aligns with answer-verification work that jointly models
 support/refute/neutral relations rather than treating a candidate as a global
 context label ([Zhang, Vu, and Moschitti, 2021](https://aclanthology.org/2021.acl-long.252/)).
+
+### N3 candidate-span probe
+
+The first implementation of that hypothesis kept N2 frozen and changed only
+the readout: it now pools the exact SentencePiece positions of the candidate in
+the context evidence window, then compares that jointly encoded span to the
+question. This is a fair ablation because the old feature pools the whole
+context while the candidate source span is already known from the runtime
+literal match.
+
+It improved the reader-generated validation AUC from 0.6290 to **0.6823** and
+safe coverage from 4.66% to **7.25%** at 1.57% false accepts. The gain confirms
+that candidate provenance is useful. It still fails the product criterion:
+at the context-disjoint calibrated threshold it accepted 0 of 776 N0 rows and
+0 of 5 handwritten rows. This rules out both global and candidate-span pooled
+*linear* readouts on frozen N2 representations. The next bounded experiment is
+a nonlinear candidate-span support head; if it cannot provide materially higher
+safe coverage on the same fixed split, N2's frozen representations are not
+sufficient for grounded refusal and we will move to an explicitly trained NLI
+cross-encoder with support/refute/neutral supervision rather than keep adding
+calibration heads.
