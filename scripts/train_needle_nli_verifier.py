@@ -69,6 +69,7 @@ def main() -> None:
     parser.add_argument("--head-lr", type=float, default=1.0e-4)
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--adapter-rank", type=int, default=0, help="Enable isolated verifier adapters; zero reproduces the legacy full-backbone pilot.")
+    parser.add_argument("--init", type=Path, help="Optional earlier adapter/head checkpoint, for NLI-to-QA specialization.")
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--run-name", default="needle26m-nli-verifier")
@@ -86,6 +87,13 @@ def main() -> None:
     verifier = nn.Sequential(
         nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, args.hidden_dim), nn.GELU(), nn.Linear(args.hidden_dim, 3)
     ).to(device=device, dtype=torch.bfloat16)
+    if args.init:
+        state = torch.load(args.init, map_location=device, weights_only=False)
+        verifier.load_state_dict(state["verifier"])
+        if args.adapter_rank:
+            model.adapters.load_state_dict(state["adapter"])  # type: ignore[union-attr]
+        elif "model" in state:
+            model.load_state_dict(state["model"])
     counts = torch.bincount(train["nli_label"], minlength=3).float()
     class_weight = (len(train["nli_label"]) / (3 * counts.clamp_min(1))).to(device)
     optimizer = torch.optim.AdamW((
