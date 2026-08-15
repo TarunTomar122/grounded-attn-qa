@@ -11,6 +11,7 @@ from torch import nn
 
 from grounded_qa.calibration import choose_threshold, sweep_thresholds
 from grounded_qa.needle_pointer import NeedlePointerModel, candidate_span_features
+from grounded_qa.needle_verifier import NeedleVerifierAdapter
 from grounded_qa.needleish import NeedleConfig
 from scripts.analyze_pointer_confidence import binary_auc
 from scripts.train_needle_n1 import load_split
@@ -29,22 +30,25 @@ def nli_metrics(logits: torch.Tensor, labels: torch.Tensor) -> dict[str, float]:
     }
 
 
-def scores(model: NeedlePointerModel, verifier: nn.Module, data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+def scores(model: nn.Module, verifier: nn.Module, data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     source = data["source_ids"][indices].to(device=device, dtype=torch.long)
     lengths = data["source_lengths"][indices].to(device=device, dtype=torch.long)
     context_start = data["context_start"][indices].to(device=device, dtype=torch.long)
-    candidate_start = data["candidate_start"][indices].to(device=device, dtype=torch.long)
-    candidate_end = data["candidate_end"][indices].to(device=device, dtype=torch.long)
     positions = torch.arange(source.shape[1], device=device)[None]
     valid = positions < lengths[:, None]
     question = valid & (positions < context_start[:, None])
-    candidate = valid & (positions >= candidate_start[:, None]) & (positions < candidate_end[:, None])
+    if "candidate_start" in data:
+        candidate_start = data["candidate_start"][indices].to(device=device, dtype=torch.long)
+        candidate_end = data["candidate_end"][indices].to(device=device, dtype=torch.long)
+        candidate = valid & (positions >= candidate_start[:, None]) & (positions < candidate_end[:, None])
+    else:
+        candidate = valid & ~question
     features = candidate_span_features(model.encode(source, valid), valid, question, candidate)
     return verifier(features), data["nli_label"][indices].to(device=device, dtype=torch.long)
 
 
 @torch.inference_mode()
-def evaluate(model: NeedlePointerModel, verifier: nn.Module, data: dict[str, torch.Tensor], device: torch.device, batch_size: int) -> dict[str, float]:
+def evaluate(model: nn.Module, verifier: nn.Module, data: dict[str, torch.Tensor], device: torch.device, batch_size: int) -> dict[str, float]:
     logits, labels = [], []
     for start in range(0, len(data["source_ids"]), batch_size):
         prediction, target = scores(model, verifier, data, torch.arange(start, min(start + batch_size, len(data["source_ids"]))), device)
@@ -64,6 +68,7 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1.0e-5)
     parser.add_argument("--head-lr", type=float, default=1.0e-4)
     parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--adapter-rank", type=int, default=0, help="Enable isolated verifier adapters; zero reproduces the legacy full-backbone pilot.")
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--run-name", default="needle26m-nli-verifier")
@@ -73,11 +78,11 @@ def main() -> None:
     torch.cuda.manual_seed_all(args.seed)
     device = torch.device("cuda")
     train, validation = load_split(args.data_dir, "train"), load_split(args.data_dir, "validation")
-    required = {"candidate_start", "candidate_end", "nli_label"}
-    if required - train.keys() or required - validation.keys():
-        raise ValueError("NLI verifier data requires candidate bounds and support/refute/neutral labels")
-    model = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=torch.bfloat16)
-    model.load_backbone_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
+    if "nli_label" not in train or "nli_label" not in validation:
+        raise ValueError("NLI verifier data requires support/refute/neutral labels")
+    reader = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=torch.bfloat16)
+    reader.load_backbone_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
+    model: nn.Module = NeedleVerifierAdapter(reader, args.adapter_rank).to(device=device, dtype=torch.bfloat16) if args.adapter_rank else reader
     verifier = nn.Sequential(
         nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, args.hidden_dim), nn.GELU(), nn.Linear(args.hidden_dim, 3)
     ).to(device=device, dtype=torch.bfloat16)
@@ -121,7 +126,12 @@ def main() -> None:
             if run:
                 run.log(metrics, step=step)
             model.train()
-            torch.save({"model": model.state_dict(), "verifier": verifier.state_dict(), "step": step, "args": vars(args)}, args.output_dir / f"step-{step:06d}.pt")
+            checkpoint = {"verifier": verifier.state_dict(), "step": step, "args": vars(args)}
+            if args.adapter_rank:
+                checkpoint["adapter"] = model.adapters.state_dict()  # type: ignore[union-attr]
+            else:
+                checkpoint["model"] = model.state_dict()
+            torch.save(checkpoint, args.output_dir / f"step-{step:06d}.pt")
     if run:
         run.finish()
 
