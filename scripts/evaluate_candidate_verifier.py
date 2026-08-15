@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
+from pathlib import Path, PosixPath
 
 import torch
 from torch import nn
@@ -18,6 +18,12 @@ from scripts.prepare_needle_n3_verifier import verifier_query
 
 def candidate_offset(context: str, candidate: str) -> int:
     return context.lower().find(candidate.lower())
+
+
+def load_head_state(path: Path, device: torch.device) -> dict[str, torch.Tensor]:
+    # Training checkpoints retain argparse Paths as harmless metadata.
+    with torch.serialization.safe_globals([PosixPath]):
+        return torch.load(path, map_location=device, weights_only=True)["head"]
 
 
 @torch.inference_mode()
@@ -41,7 +47,7 @@ def main() -> None:
     model.load_backbone_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
     model.eval()
     head = nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, 1).to(device=device, dtype=dtype)
-    head.load_state_dict(torch.load(args.head, map_location=device, weights_only=True)["head"])
+    head.load_state_dict(load_head_state(args.head, device))
     head.eval()
 
     eligible: list[tuple[int, list[int], int]] = []
