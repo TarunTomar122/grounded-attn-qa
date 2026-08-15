@@ -16,18 +16,25 @@ from scripts.prepare_needle_n3_verifier import tensorize
 
 
 LABELS = {"neutral": 0, "contradiction": 1, "entailment": 2}
+SNLI_LABELS = {0: 2, 1: 0, 2: 1}  # dataset IDs: entailment, neutral, contradiction
 
 
 def nli_query(claim: str) -> str:
     return f"Claim: {claim}\nDoes the evidence support, contradict, or leave this claim unknown?"
 
 
+def label_id(label: int | str) -> int | None:
+    if isinstance(label, str):
+        return LABELS.get(label)
+    return SNLI_LABELS.get(label)
+
+
 def split_rows(rows, tokenizer: NeedleTokenizer, limit: int) -> tuple[list[tuple[list[int], int, bool]], dict[str, int]]:
     selected = []
     stats = {"seen": 0, "kept": 0, "too_long": 0, "invalid_label": 0}
     for row in rows:
-        label = row["label"]
-        if label not in LABELS:
+        label = label_id(row["label"])
+        if label is None:
             stats["invalid_label"] += 1
             continue
         ids = tokenizer.encode_source(nli_query(row["hypothesis"]), row["premise"])
@@ -66,8 +73,9 @@ def main() -> None:
         tensors = tensorize(rows)
         labels = []
         for row in dataset[split]:
-            if row["label"] in LABELS and len(tokenizer.encode_source(nli_query(row["hypothesis"]), row["premise"])) <= SOURCE_LENGTH:
-                labels.append(LABELS[row["label"]])
+            label = label_id(row["label"])
+            if label is not None and len(tokenizer.encode_source(nli_query(row["hypothesis"]), row["premise"])) <= SOURCE_LENGTH:
+                labels.append(label)
                 if len(labels) == len(rows):
                     break
         tensors["nli_label"] = torch.tensor(labels, dtype=torch.int64)
