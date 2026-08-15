@@ -17,6 +17,7 @@ from grounded_qa.needle_qa_data import (
 )
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, TARGET_LENGTH, tensorize
 from scripts.prepare_needle_n3 import cross_pair_negatives
+from scripts.prepare_needle_n3_entity import prepare_entity_binding_pairs
 
 
 @dataclass
@@ -210,6 +211,20 @@ class NeedleQADataTests(unittest.TestCase):
         self.assertTrue(torch.equal(negatives["target_ids"][:, 0], torch.ones(4, dtype=torch.int16)))
         self.assertTrue(torch.equal(negatives["target_lengths"], torch.ones(4, dtype=torch.int16)))
         self.assertTrue((negatives["gold_copy_positions"] == -1).all())
+
+    def test_entity_binding_pairs_keep_context_and_mark_missing_subject_unanswerable(self) -> None:
+        positive, negative = prepare_entity_binding_pairs(3, FakeTokenizer(), seed=7)
+
+        self.assertEqual(len(positive), 3)
+        self.assertEqual(len(negative), 3)
+        for answerable, unanswerable in zip(positive, negative):
+            self.assertGreater(len(answerable.target_ids), 1)
+            self.assertEqual(unanswerable.target_ids, [1])
+            self.assertTrue(all(position == -1 for position in unanswerable.gold_copy_positions))
+            self.assertEqual(
+                answerable.source_ids[answerable.context_start :],
+                unanswerable.source_ids[unanswerable.context_start :],
+            )
 
 
 if __name__ == "__main__":
