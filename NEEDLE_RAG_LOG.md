@@ -468,3 +468,18 @@ safe coverage on the same fixed split, N2's frozen representations are not
 sufficient for grounded refusal and we will move to an explicitly trained NLI
 cross-encoder with support/refute/neutral supervision rather than keep adding
 calibration heads.
+
+### N3 nonlinear candidate-span control
+
+The final cheap control added a 0.52M-parameter GELU MLP above the same frozen
+question/candidate-span features. It did not improve them: AUC was 0.6776,
+below the linear span probe's 0.6823, with identical 7.25% safe coverage at
+1.89% false accepts. Its end-to-end N0 result again accepted 0 of 776 rows.
+
+This closes the frozen-readout branch. Three feature choices (global context,
+candidate source span, and a nonlinear span MLP) all refuse almost every valid
+reader output when calibrated safely. The N2 reader remains separately intact,
+so the next work is a dedicated, trainable NLI-style cross-encoder verifier
+over question, candidate, and local evidence. It will use the already-created
+reader-generated candidates, explicit support/refute/neutral labels, and a
+context-disjoint calibration split; it will not update N2's copying weights.
