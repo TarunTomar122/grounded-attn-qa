@@ -330,6 +330,8 @@ def main() -> None:
     torch.set_float32_matmul_precision("high")
     device = torch.device("cuda")
     train, validation = load_split(args.data_dir, "train"), load_split(args.data_dir, "validation")
+    if args.answerability and (train["answerable"] & train["gold_copy_positions"][:, 0].lt(0)).any():
+        parser.error("--answerability requires every answerable training row to have a gold source start; filter paraphrastic rows first")
     answerability_pos_weight = None
     if args.answerability:
         positives = int(train["answerable"].sum())
