@@ -14,7 +14,7 @@ from grounded_qa.needle_qa_data import _evidence_window
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig
 from scripts.prepare_needle_n2 import SOURCE_LENGTH
-from scripts.prepare_needle_n3_verifier import verifier_query
+from scripts.prepare_needle_n3_verifier import verifier_claim, verifier_query
 
 
 def candidate_offset(context: str, candidate: str) -> int:
@@ -50,6 +50,7 @@ def main() -> None:
     parser.add_argument("--nli", action="store_true", help="Use a support/refute/neutral verifier checkpoint.")
     parser.add_argument("--adapter-rank", type=int, default=0, help="Load a frozen-reader verification adapter from an NLI checkpoint.")
     parser.add_argument("--evidence-radius", type=int, default=0, help="Include this many source tokens around the copied span as verifier evidence.")
+    parser.add_argument("--claim", action="store_true", help="Render question/candidate as the declarative claim used by NLI training.")
     args = parser.parse_args()
 
     report = json.loads(args.input.read_text())
@@ -80,7 +81,7 @@ def main() -> None:
         offset = candidate_offset(row["context"], candidate)
         if offset < 0:
             continue
-        query = verifier_query(row["question"], candidate)
+        query = verifier_claim(row["question"], candidate) if args.claim else verifier_query(row["question"], candidate)
         window = _evidence_window(tokenizer, query, row["context"], offset, offset + len(candidate), max_source_length=SOURCE_LENGTH)
         if window is not None:
             candidate_positions = window[2]

@@ -21,6 +21,11 @@ def verifier_query(question: str, candidate: str) -> str:
     return f"Question: {question}\nCandidate answer: {candidate}\nIs this candidate supported by the context?"
 
 
+def verifier_claim(question: str, candidate: str) -> str:
+    """A stable QA-to-NLI bridge; richer conversion is evaluated separately."""
+    return f'Claim: The answer to the question "{question}" is "{candidate}".'
+
+
 def normalized(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
 

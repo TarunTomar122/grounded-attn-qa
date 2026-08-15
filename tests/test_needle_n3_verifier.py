@@ -1,10 +1,14 @@
 import random
 
-from scripts.prepare_needle_n3_verifier import distractor, verifier_query
+from scripts.prepare_needle_n3_verifier import distractor, verifier_claim, verifier_query
 
 
 def test_verifier_query_contains_question_and_candidate() -> None:
     assert verifier_query("Who arrived?", "Rhea") == "Question: Who arrived?\nCandidate answer: Rhea\nIs this candidate supported by the context?"
+
+
+def test_verifier_claim_binds_candidate_to_question() -> None:
+    assert verifier_claim("Who arrived?", "Rhea") == 'Claim: The answer to the question "Who arrived?" is "Rhea".'
 
 
 def test_distractor_excludes_gold_answer() -> None:

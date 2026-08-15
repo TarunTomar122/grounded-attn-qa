@@ -13,7 +13,7 @@ from grounded_qa.needle_qa_data import SQUAD2_DATASET, SQUAD2_REVISION, _evidenc
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, sha256
 from scripts.prepare_needle_n3_matched import split_for_context
-from scripts.prepare_needle_n3_verifier import normalized, tensorize, verifier_query
+from scripts.prepare_needle_n3_verifier import normalized, tensorize, verifier_claim, verifier_query
 
 
 def is_supported_candidate(row: dict) -> bool:
@@ -84,7 +84,7 @@ def write_reader_inputs(tokenizer_path: Path, output_dir: Path) -> None:
     (output_dir / "n3-reader-candidates-input-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
-def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path], output_dir: Path) -> None:
+def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path], output_dir: Path, *, claim: bool = False) -> None:
     tokenizer = NeedleTokenizer(tokenizer_path, append_markers=False)
     rows: dict[str, list[tuple[list[int], int, bool, int, int, int]]] = {"train": [], "validation": []}
     stats = defaultdict(int)
@@ -99,9 +99,10 @@ def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path]
             if start < 0:
                 stats["nonliteral_candidate"] += 1
                 continue
+            query = verifier_claim(row["question"], candidate) if claim else verifier_query(row["question"], candidate)
             window = _evidence_window(
                 tokenizer,
-                verifier_query(row["question"], candidate),
+                query,
                 row["context"],
                 start,
                 start + len(candidate),
@@ -160,11 +161,12 @@ def main() -> None:
         subparser.add_argument("--output-dir", type=Path, required=True)
         if command == "materialize":
             subparser.add_argument("--reader-report", type=Path, action="append", required=True)
+            subparser.add_argument("--claim", action="store_true", help="Render question/candidate as a declarative NLI claim.")
     args = parser.parse_args()
     if args.command == "emit-inputs":
         write_reader_inputs(args.tokenizer, args.output_dir)
     else:
-        materialize_reader_candidates(args.tokenizer, args.reader_report, args.output_dir)
+        materialize_reader_candidates(args.tokenizer, args.reader_report, args.output_dir, claim=args.claim)
 
 
 if __name__ == "__main__":
