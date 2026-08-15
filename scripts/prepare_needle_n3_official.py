@@ -22,6 +22,22 @@ def select_tensor_rows(rows: dict[str, torch.Tensor], count: int, seed: int) -> 
     return {key: value.index_select(0, indices) for key, value in rows.items()}
 
 
+def partition_tensor_rows(
+    rows: dict[str, torch.Tensor], validation_ratio: float, seed: int
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    """Make deterministic, disjoint train/development rows from one source split."""
+    total = len(rows["source_ids"])
+    if not 0 < validation_ratio < 1 or total < 2:
+        raise ValueError("validation ratio must be in (0, 1) and source needs at least two rows")
+    indices = torch.randperm(total, generator=torch.Generator().manual_seed(seed))
+    validation_rows = min(max(1, round(total * validation_ratio)), total - 1)
+    train_indices, validation_indices = indices[validation_rows:], indices[:validation_rows]
+    return (
+        {key: value.index_select(0, train_indices) for key, value in rows.items()},
+        {key: value.index_select(0, validation_indices) for key, value in rows.items()},
+    )
+
+
 def official_negatives(split: str, tokenizer) -> list:
     prepared = []
     for index, row in enumerate(load_dataset(SQUAD2_DATASET, split=split, revision=SQUAD2_REVISION)):
@@ -36,6 +52,11 @@ def main() -> None:
     parser.add_argument("--n2-data-dir", type=Path, required=True)
     parser.add_argument("--tokenizer", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--development-from-train",
+        action="store_true",
+        help="Hold out development rows from source train data, preserving public validation for external evaluation.",
+    )
     args = parser.parse_args()
 
     tokenizer = NeedleTokenizer(args.tokenizer, append_markers=False)
@@ -45,11 +66,22 @@ def main() -> None:
         "composition": {"n2_answerable": 0.50, "entity_answerable": 0.10, "relation_answerable": 0.10, "cross_pair": 0.05, "entity_missing": 0.05, "relation_missing": 0.05, "official_squad2_missing": 0.15},
         "official_dataset": {"name": SQUAD2_DATASET, "revision": SQUAD2_REVISION},
         "n2_manifest_sha256": sha256(args.n2_data_dir / "n2-manifest.json"),
+        "development_source": "source_validation",
         "splits": {},
     }
-    for split, seed in (("train", 131), ("validation", 191)):
-        n2_all = load_split(args.n2_data_dir, split)
-        official_all = tensorize(official_negatives(split, tokenizer))
+    if args.development_from_train:
+        n2_train, n2_validation = partition_tensor_rows(load_split(args.n2_data_dir, "train"), 0.05, seed=101)
+        official_train, official_validation = partition_tensor_rows(
+            tensorize(official_negatives("train", tokenizer)), 0.05, seed=102
+        )
+        sources = (("train", n2_train, official_train, 131), ("validation", n2_validation, official_validation, 191))
+        manifest["development_source"] = "deterministic_5_percent_of_source_train"
+    else:
+        sources = tuple(
+            (split, load_split(args.n2_data_dir, split), tensorize(official_negatives(split, tokenizer)), seed)
+            for split, seed in (("train", 131), ("validation", 191))
+        )
+    for split, n2_all, official_all, seed in sources:
         n2_rows = min(len(n2_all["source_ids"]), len(official_all["source_ids"]) * 10 // 3)
         official_rows = round(n2_rows * 3 / 10)
         n2 = select_tensor_rows(n2_all, n2_rows, seed)

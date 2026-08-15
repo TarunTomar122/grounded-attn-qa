@@ -18,7 +18,7 @@ from grounded_qa.needle_qa_data import (
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, TARGET_LENGTH, tensorize
 from scripts.prepare_needle_n3 import cross_pair_negatives
 from scripts.prepare_needle_n3_entity import prepare_entity_binding_pairs, prepare_relation_binding_pairs
-from scripts.prepare_needle_n3_official import select_tensor_rows
+from scripts.prepare_needle_n3_official import partition_tensor_rows, select_tensor_rows
 
 
 @dataclass
@@ -251,6 +251,17 @@ class NeedleQADataTests(unittest.TestCase):
         self.assertTrue(torch.equal(first["answerable"], second["answerable"]))
         self.assertEqual(first["source_ids"].shape, (3, 3))
         self.assertTrue(rows["answerable"].all())
+
+    def test_train_development_partition_is_deterministic_and_disjoint(self) -> None:
+        rows = {"source_ids": torch.arange(30).reshape(10, 3), "answerable": torch.ones(10, dtype=torch.bool)}
+        train, development = partition_tensor_rows(rows, 0.2, seed=13)
+        repeated_train, repeated_development = partition_tensor_rows(rows, 0.2, seed=13)
+
+        self.assertTrue(torch.equal(train["source_ids"], repeated_train["source_ids"]))
+        self.assertTrue(torch.equal(development["source_ids"], repeated_development["source_ids"]))
+        self.assertEqual(len(train["source_ids"]), 8)
+        self.assertEqual(len(development["source_ids"]), 2)
+        self.assertFalse(set(train["source_ids"][:, 0].tolist()) & set(development["source_ids"][:, 0].tolist()))
 
 
 if __name__ == "__main__":
