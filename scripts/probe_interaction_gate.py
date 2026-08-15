@@ -71,7 +71,7 @@ def main() -> None:
     model = NeedleAnswerablePointerModel(NeedleConfig.public_checkpoint()).to(
         device=device, dtype=torch.bfloat16 if device.type == "cuda" else torch.float32
     )
-    model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
+    model.load_backbone_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
     model.eval()
     torch.manual_seed(args.seed)
     generator = torch.Generator().manual_seed(args.seed)
