@@ -8,7 +8,7 @@ import torch
 from torch import nn
 
 from grounded_qa.negatives import REFUSAL
-from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, answerability_interaction_features
+from grounded_qa.needle_pointer import NeedlePointerModel, answerability_interaction_features
 from grounded_qa.needle_qa_data import _evidence_window
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig
@@ -37,7 +37,7 @@ def main() -> None:
     tokenizer = NeedleTokenizer(args.tokenizer, append_markers=False)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
-    model = NeedleAnswerablePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=dtype)
+    model = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=dtype)
     model.load_backbone_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
     model.eval()
     head = nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, 1).to(device=device, dtype=dtype)
