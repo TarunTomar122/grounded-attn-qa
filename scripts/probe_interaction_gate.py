@@ -23,7 +23,7 @@ def interaction_features(memory: torch.Tensor, source_valid: torch.Tensor, conte
     return torch.cat((question, context, question * context, (question - context).abs()), dim=-1)
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def encode_features(model, data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.device, batch_size: int) -> torch.Tensor:
     features = []
     for start in range(0, len(indices), batch_size):
@@ -91,7 +91,7 @@ def main() -> None:
 
     head = nn.Linear(train_features.shape[1], 1)
     optimizer = torch.optim.AdamW(head.parameters(), lr=args.lr)
-    pos_weight = torch.tensor((len(train_labels) - train_labels.sum()) / train_labels.sum().clamp_min(1))
+    pos_weight = (len(train_labels) - train_labels.sum()) / train_labels.sum().clamp_min(1)
     for _ in range(args.steps):
         indices = torch.randint(len(train_features), (args.batch_size,), generator=generator)
         logits = head(train_features[indices]).squeeze(-1)
