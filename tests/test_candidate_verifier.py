@@ -3,6 +3,7 @@ from pathlib import PosixPath
 import torch
 
 from scripts.evaluate_candidate_verifier import candidate_offset, is_answerable, load_head_state, load_verifier_state, safe_gate_summary
+from scripts.sweep_candidate_risk import sweep
 
 
 def test_candidate_offset_is_case_insensitive() -> None:
@@ -47,3 +48,16 @@ def test_safe_gate_summary_counts_wrong_reader_answers_as_risk() -> None:
     assert summary["safe_answer_coverage"] == 1 / 3
     assert summary["accepted_answer_risk"] == 0.5
     assert summary["wrong_reader_answer_accept_rate"] == 0.5
+
+
+def test_risk_sweep_changes_the_gate_threshold() -> None:
+    rows = [
+        {"answerable": True, "em": 1.0, "candidate_probability": 0.8},
+        {"answerable": True, "em": 0.0, "candidate_probability": 0.2},
+    ]
+
+    curve = sweep(rows, points=3)
+
+    assert curve[0]["accepted"] == 2
+    assert curve[-1]["accepted"] == 0
+    assert curve[1]["accepted_answer_risk"] == 0.0
