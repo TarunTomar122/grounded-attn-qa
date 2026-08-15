@@ -78,41 +78,42 @@ def write_reader_inputs(tokenizer_path: Path, output_dir: Path) -> None:
     (output_dir / "n3-reader-candidates-input-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
-def materialize_reader_candidates(tokenizer_path: Path, report_path: Path, output_dir: Path) -> None:
+def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path], output_dir: Path) -> None:
     tokenizer = NeedleTokenizer(tokenizer_path, append_markers=False)
-    report = json.loads(report_path.read_text())
     rows: dict[str, list[tuple[list[int], int, bool]]] = {"train": [], "validation": []}
     stats = defaultdict(int)
-    for row in report["examples"]:
-        candidate = str(row.get("raw_prediction", row.get("prediction", ""))).strip()
-        if not candidate:
-            stats["empty_candidate"] += 1
-            continue
-        start = row["context"].lower().find(candidate.lower())
-        if start < 0:
-            stats["nonliteral_candidate"] += 1
-            continue
-        window = _evidence_window(
-            tokenizer,
-            verifier_query(row["question"], candidate),
-            row["context"],
-            start,
-            start + len(candidate),
-            max_source_length=SOURCE_LENGTH,
-        )
-        if window is None:
-            stats["window_too_long"] += 1
-            continue
-        ids, _, _, context_start, _ = window
-        supported = is_supported_candidate(row)
-        rows[row["split"]].append((ids, context_start, supported))
-        stats["supported" if supported else "unsupported"] += 1
-        stats["answerable" if row["answerable"] else "unanswerable"] += 1
+    for report_path in report_paths:
+        report = json.loads(report_path.read_text())
+        for row in report["examples"]:
+            candidate = str(row.get("raw_prediction", row.get("prediction", ""))).strip()
+            if not candidate:
+                stats["empty_candidate"] += 1
+                continue
+            start = row["context"].lower().find(candidate.lower())
+            if start < 0:
+                stats["nonliteral_candidate"] += 1
+                continue
+            window = _evidence_window(
+                tokenizer,
+                verifier_query(row["question"], candidate),
+                row["context"],
+                start,
+                start + len(candidate),
+                max_source_length=SOURCE_LENGTH,
+            )
+            if window is None:
+                stats["window_too_long"] += 1
+                continue
+            ids, _, _, context_start, _ = window
+            supported = is_supported_candidate(row)
+            rows[row["split"]].append((ids, context_start, supported))
+            stats["supported" if supported else "unsupported"] += 1
+            stats["answerable" if row["answerable"] else "unanswerable"] += 1
 
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "purpose": "Verifier data from literal candidates produced by the deployed reader; nonliteral candidates are refused at inference.",
-        "reader_report": {"path": str(report_path), "sha256": hashlib.sha256(report_path.read_bytes()).hexdigest()},
+        "reader_reports": [{"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path in report_paths],
         "stats": dict(stats),
         "splits": {},
     }
@@ -137,7 +138,7 @@ def main() -> None:
         subparser.add_argument("--tokenizer", type=Path, required=True)
         subparser.add_argument("--output-dir", type=Path, required=True)
         if command == "materialize":
-            subparser.add_argument("--reader-report", type=Path, required=True)
+            subparser.add_argument("--reader-report", type=Path, action="append", required=True)
     args = parser.parse_args()
     if args.command == "emit-inputs":
         write_reader_inputs(args.tokenizer, args.output_dir)
