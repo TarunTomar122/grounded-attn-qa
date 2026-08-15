@@ -615,3 +615,33 @@ coverage at the same step. The run was not transferred to QA. This rules out
 the simple one-token decoder-cross-attention formulation; the reader's decoder
 is useful for answer generation but is not an immediately better verifier
 representation under isolated adaptation.
+
+### N3 joint reader-verifier pilot
+
+The next hypothesis changed the training boundary rather than adding another
+frozen branch: allow the shared N2-PG reader to learn verification, while
+replaying its original answer task on alternating batches. The architecture is
+still one N2-PG reader plus one small three-way support/refute/unknown head.
+Reader batches use the original N2 SQuAD2/CoQA tensors and pointer loss;
+verification batches use the frozen-reader literal-candidate corpus. Both
+losses update the shared reader, so answer replay is the explicit anti-forgetting
+control. A focused test confirms verification loss reaches the shared encoder.
+
+The 500-step RTX 4090 pilot (W&B `a915x0hi`) used a cautious reader learning
+rate of `1e-6`, head learning rate `1e-4`, equal answer/verification sampling,
+and a fixed 1,024-row N2 validation subset evaluated every 100 steps. The
+reader was preserved: pointer-position accuracy was **83.47%** at step 0 and
+**83.56%** at step 500 (+0.09 points); sequence NLL also improved from
+**1.31967** to **1.31940**. Verification began at chance-level support AUC
+**0.5096**, peaked at **0.5892** at step 200, and finished at **0.5750**. Its
+best safe support coverage was **3.11%** at a 1.73% false-support rate (step
+200). The best current checkpoint is therefore
+`/root/autodl-tmp/runs/n3-joint-reader-verifier-500/step-000200.pt`, not the
+last checkpoint.
+
+This is a positive safety result and a weak semantic-learning result. Joint
+training demonstrably avoids the catastrophic reader damage that made full
+unreplayed fine-tuning unsafe, but 500 steps has not yet produced a useful
+verifier. The next run should start from the best step-200 checkpoint and use
+the same fixed reader-replay gate; it should not be extended blindly from the
+last checkpoint.
