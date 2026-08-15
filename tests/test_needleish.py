@@ -250,3 +250,5 @@ def test_answerability_calibration_separates_classes() -> None:
     assert metrics["answerability_f1"] == 1
     assert metrics["refusal_f1"] == 1
     assert 0.2 < metrics["threshold"] <= 0.8
+    assert metrics["grounded_false_answer_rate"] <= 0.02
+    assert metrics["grounded_answer_coverage"] == 1

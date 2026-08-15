@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
+from grounded_qa.calibration import choose_threshold, sweep_thresholds
 from grounded_qa.metrics import exact_match, token_f1
 from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, pointer_loss
 from grounded_qa.needle_tokenizer import EOS_ID, NeedleTokenizer
@@ -71,7 +72,7 @@ def load_start(model: NeedlePointerModel | NeedleAnswerablePointerModel, path: P
 
 
 def calibrate_answerability(probabilities: torch.Tensor, answerable: torch.Tensor, steps: int = 201) -> dict[str, float]:
-    """Choose the validation threshold maximizing mean answer/refusal F1."""
+    """Report both a balanced-F1 threshold and the highest-coverage grounded threshold."""
     thresholds = torch.linspace(0, 1, steps)
     predicted = probabilities[:, None] >= thresholds[None]
     labels = answerable[:, None]
@@ -82,6 +83,10 @@ def calibrate_answerability(probabilities: torch.Tensor, answerable: torch.Tenso
     answer_f1 = 2 * tp / (2 * tp + fp + fn).clamp_min(1)
     refusal_f1 = 2 * tn / (2 * tn + fp + fn).clamp_min(1)
     index = int(((answer_f1 + refusal_f1) / 2).argmax())
+    grounded = choose_threshold(
+        sweep_thresholds(probabilities.tolist(), answerable.tolist(), thresholds=steps),
+        max_false_answer_rate=0.02,
+    )
     return {
         "threshold": float(thresholds[index]),
         "answerability_f1": float(answer_f1[index]),
@@ -90,6 +95,12 @@ def calibrate_answerability(probabilities: torch.Tensor, answerable: torch.Tenso
         "refusal_f1": float(refusal_f1[index]),
         "false_refusal_rate": float(fn[index] / (tp[index] + fn[index]).clamp_min(1)),
         "hallucinated_answer_rate": float(fp[index] / (tn[index] + fp[index]).clamp_min(1)),
+        "grounded_threshold": grounded.threshold,
+        "grounded_answer_coverage": grounded.answer_coverage,
+        "grounded_answer_precision": grounded.answer_precision,
+        "grounded_false_answer_rate": grounded.false_answer_rate,
+        "grounded_false_refusal_rate": grounded.false_refusal_rate,
+        "grounded_refusal_recall": grounded.refusal_recall,
     }
 
 

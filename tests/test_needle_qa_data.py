@@ -16,6 +16,7 @@ from grounded_qa.needle_qa_data import (
     span_piece_indices,
 )
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, TARGET_LENGTH, tensorize
+from scripts.prepare_needle_n3 import cross_pair_negatives
 
 
 @dataclass
@@ -180,6 +181,35 @@ class NeedleQADataTests(unittest.TestCase):
         length = int(tensors["target_lengths"][0])
         self.assertEqual(int(tensors["target_ids"][0, length - 1]), 1)
         self.assertEqual(int(tensors["gold_copy_positions"][0, length - 1]), -1)
+
+    def test_cross_pair_negative_keeps_question_and_replaces_context(self) -> None:
+        positives = {
+            "source_ids": torch.tensor([
+                [10, 5, 20, 21, 0, 0],
+                [11, 5, 30, 31, 0, 0],
+                [12, 5, 40, 41, 0, 0],
+                [13, 5, 50, 51, 0, 0],
+            ], dtype=torch.int16),
+            "target_ids": torch.tensor([[20, 1], [30, 1], [40, 1], [50, 1]], dtype=torch.int16),
+            "source_lengths": torch.tensor([4, 4, 4, 4], dtype=torch.int16),
+            "target_lengths": torch.tensor([2, 2, 2, 2], dtype=torch.int16),
+            "context_start": torch.tensor([2, 2, 2, 2], dtype=torch.int16),
+            "gold_copy_positions": torch.tensor([[2, -1], [2, -1], [2, -1], [2, -1]], dtype=torch.int16),
+            "example_index": torch.tensor([0, 1, 2, 3], dtype=torch.int32),
+            "turn_index": torch.zeros(4, dtype=torch.int16),
+            "evidence_start": torch.zeros(4, dtype=torch.int32),
+            "evidence_end": torch.ones(4, dtype=torch.int32),
+            "window_start": torch.zeros(4, dtype=torch.int32),
+        }
+
+        negatives = cross_pair_negatives(positives, count=4)
+
+        for row, source_index in enumerate(negatives["example_index"].tolist()):
+            self.assertTrue(torch.equal(negatives["source_ids"][row, :2], positives["source_ids"][source_index, :2]))
+            self.assertFalse(torch.equal(negatives["source_ids"][row, 2:4], positives["source_ids"][source_index, 2:4]))
+        self.assertTrue(torch.equal(negatives["target_ids"][:, 0], torch.ones(4, dtype=torch.int16)))
+        self.assertTrue(torch.equal(negatives["target_lengths"], torch.ones(4, dtype=torch.int16)))
+        self.assertTrue((negatives["gold_copy_positions"] == -1).all())
 
 
 if __name__ == "__main__":
