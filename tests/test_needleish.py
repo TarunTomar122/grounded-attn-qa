@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 import pytest
 
@@ -59,6 +61,8 @@ def test_needle_pointer_masks_query_and_normalizes_final_distribution() -> None:
 
     assert torch.equal(output.copy_position_probs[..., :2], torch.zeros_like(output.copy_position_probs[..., :2]))
     torch.testing.assert_close(output.final_distribution(source).sum(dim=-1), torch.ones(1, 2))
+    assert output.decoder_hidden is not None
+    assert output.decoder_hidden.shape == (1, 2, cfg.d_model)
 
 
 def test_needle_pointer_position_loss_selects_the_annotated_duplicate() -> None:
@@ -225,6 +229,8 @@ def test_answerability_head_receives_gradient_without_copy_targets() -> None:
     assert output.answerability_logits is not None
     torch.nn.functional.binary_cross_entropy_with_logits(output.answerability_logits, torch.zeros(1)).backward()
     assert model.pointer.pointer_q.weight.grad is not None
+    assert model.no_answer_key.grad is not None
+    assert model.no_answer_key.grad.abs().sum() > 0
     assert model.pointer.gate.weight.grad is None
 
 
@@ -265,15 +271,30 @@ def test_zero_answerability_bce_weight_preserves_base_loss() -> None:
     assert logits.grad is None
 
 
-def test_answerability_head_scores_first_pointer_positions_against_no_answer() -> None:
+def test_answerability_head_scores_first_pointer_positions_against_conditioned_null() -> None:
     model = NeedleAnswerablePointerModel(tiny_config())
-    model.no_answer_logit.data.zero_()
-    pointer_logits = torch.tensor([[[float("-inf"), 1.0, 0.0]], [[float("-inf"), 3.0, 0.0]]])
-    positions = model.evidence_position_logits(pointer_logits)
+    with torch.no_grad():
+        model.pointer.pointer_q.weight.copy_(torch.eye(tiny_config().d_model))
+        model.no_answer_key.zero_()
+        model.no_answer_key[0] = 1
+        model.no_answer_bias.zero_()
+    decoder_hidden = torch.zeros(2, 1, tiny_config().d_model)
+    decoder_hidden[1, 0, 0] = 2
+    pointer_logits = torch.tensor([[[float("-inf"), 1.0, 0.0]], [[float("-inf"), 1.0, 0.0]]])
+    positions = model.evidence_position_logits(pointer_logits, decoder_hidden)
     logits = model.classify_answerability(positions)
-    assert logits[1] > logits[0]
+    torch.testing.assert_close(positions[:, 0], torch.tensor([0.0, 2 / math.sqrt(tiny_config().d_model)]))
+    assert logits[1] < logits[0]
     assert positions.shape == (2, 4)
     assert torch.isneginf(positions[:, 1]).all()
+
+
+def test_conditioned_null_keeps_bos_source_logits_exactly() -> None:
+    model = NeedleAnswerablePointerModel(tiny_config())
+    hidden = torch.randn(2, 1, tiny_config().d_model)
+    pointer_logits = torch.randn(2, 1, 5)
+    positions = model.evidence_position_logits(pointer_logits, hidden)
+    torch.testing.assert_close(positions[:, 1:], pointer_logits[:, 0])
 
 
 def test_evidence_start_loss_uses_null_for_negative_rows() -> None:
@@ -291,6 +312,9 @@ def test_backbone_loader_ignores_legacy_answerability_head() -> None:
     state = model.state_dict()
     state["token_embedding.weight"] = torch.ones_like(state["token_embedding.weight"])
     state["answerability.weight"] = torch.zeros((1, tiny_config().d_model))
+    state["no_answer_logit"] = torch.tensor(math.log(256.0))
+    state.pop("no_answer_key")
+    state.pop("no_answer_bias")
     model.load_backbone_state_dict(state)
     assert torch.equal(model.token_embedding.weight, torch.ones_like(model.token_embedding.weight))
 

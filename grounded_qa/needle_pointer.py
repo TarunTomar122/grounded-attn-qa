@@ -49,6 +49,7 @@ class NeedlePointerOutput:
     answerability_logits: torch.Tensor | None = None
     evidence_position_logits: torch.Tensor | None = None
     copy_position_logits: torch.Tensor | None = None
+    decoder_hidden: torch.Tensor | None = None
 
     def final_distribution(self, source_ids: torch.Tensor) -> torch.Tensor:
         copy = PointerGenerator.copy_distribution(
@@ -67,6 +68,7 @@ class NeedlePointerModel(NeedleishModel):
         self.pointer = PointerGenerator(cfg.d_model)
         self.pointer.apply(self._init)
         nn.init.zeros_(self.pointer.gate.bias)
+        self._last_decoder_hidden: torch.Tensor | None = None
 
     def forward(
         self,
@@ -104,7 +106,15 @@ class NeedlePointerModel(NeedleishModel):
             self.token_embedding(decoder_input_ids),
             self.token_embedding.weight,
         )
-        return NeedlePointerOutput(vocab_logits, copy_probs, p_gen, copy_position_logits=copy_logits)
+        # Keep legacy read-only callers that pass only copy logits compatible.
+        self._last_decoder_hidden = hidden.detach()
+        return NeedlePointerOutput(
+            vocab_logits,
+            copy_probs,
+            p_gen,
+            copy_position_logits=copy_logits,
+            decoder_hidden=hidden,
+        )
 
     def load_backbone_state_dict(self, state: dict[str, torch.Tensor]) -> None:
         # Heads are experimental and may change shape; the pretrained reader and
@@ -112,7 +122,16 @@ class NeedlePointerModel(NeedleishModel):
         expected = self.state_dict()
         compatible = {name: value for name, value in state.items() if name in expected and expected[name].shape == value.shape}
         missing, unexpected = self.load_state_dict(compatible, strict=False)
-        optional_heads = ("pointer.", "answerability.", "evidence.", "no_answer_logit")
+        # Legacy no_answer_logit is filtered out above; new NULL parameters are
+        # optional when loading older N2/N3 checkpoints.
+        optional_heads = (
+            "pointer.",
+            "answerability.",
+            "evidence.",
+            "no_answer_logit",
+            "no_answer_key",
+            "no_answer_bias",
+        )
         if unexpected or any(not name.startswith(optional_heads) for name in missing):
             raise ValueError(f"Backbone checkpoint mismatch: missing={missing}, unexpected={unexpected}")
 
@@ -122,8 +141,10 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
 
     def __init__(self, cfg: NeedleConfig):
         super().__init__(cfg)
+        self.no_answer_key = nn.Parameter(torch.empty(cfg.d_model))
+        nn.init.normal_(self.no_answer_key, mean=0.0, std=0.02)
         # Start roughly neutral for a typical 256-token context.
-        self.no_answer_logit = nn.Parameter(torch.tensor(math.log(256.0)))
+        self.no_answer_bias = nn.Parameter(torch.tensor(math.log(256.0)))
 
     def forward(
         self,
@@ -142,7 +163,10 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
             context_mask,
             target_valid,
         )
-        evidence_position_logits = self.evidence_position_logits(output.copy_position_logits)
+        evidence_position_logits = self.evidence_position_logits(
+            output.copy_position_logits,
+            output.decoder_hidden,
+        )
         answerability_logits = self.classify_answerability(evidence_position_logits)
         return NeedlePointerOutput(
             output.vocab_logits,
@@ -151,13 +175,23 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
             answerability_logits,
             evidence_position_logits,
             output.copy_position_logits,
+            output.decoder_hidden,
         )
 
-    def evidence_position_logits(self, copy_position_logits: torch.Tensor | None) -> torch.Tensor:
+    def evidence_position_logits(
+        self,
+        copy_position_logits: torch.Tensor | None,
+        decoder_hidden: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Let the BOS pointer select a source start or the single NULL class."""
         if copy_position_logits is None:
             raise ValueError("evidence selection requires pointer logits")
-        return torch.cat((self.no_answer_logit.expand(len(copy_position_logits), 1), copy_position_logits[:, 0]), dim=1)
+        decoder_hidden = self._last_decoder_hidden if decoder_hidden is None else decoder_hidden
+        if decoder_hidden is None:
+            raise ValueError("evidence selection requires decoder hidden states")
+        query = self.pointer.pointer_q(decoder_hidden)[:, 0]
+        null_score = self.no_answer_bias + query @ self.no_answer_key / math.sqrt(self.cfg.d_model)
+        return torch.cat((null_score[:, None], copy_position_logits[:, 0]), dim=1)
 
     def classify_answerability(
         self,
