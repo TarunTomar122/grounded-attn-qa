@@ -306,3 +306,35 @@ The next measured intervention is an **entity-binding negative stage** between
 cross-pair and official SQuAD2 negatives. Exact manifests, run IDs, metrics,
 and the decision are stored in
 `artifacts/needle_n3_curriculum_pilots_2026-08-15.json`.
+
+### N3 binding and calibration follow-up
+
+The entity- and relation-binding bridges both taught their intended synthetic
+control without fixing natural unsupported questions. B4 (entity) achieved
+89.22% development pointer-position accuracy; B5 (relation) reached 91.44%.
+Both still answered the neutral handwritten observatory-password question,
+showing that synthetic binding was not the remaining bottleneck.
+
+B6 added 15% official SQuAD2 unanswerables. Its initial development split used
+the public SQuAD2 validation partition, which overlaps the 256-row N0
+diagnostic benchmark. That split is therefore invalid for model selection and
+is retained only as an audit record.
+
+B7 repaired the protocol: its 275,486 training rows and 14,500 development
+rows are deterministic, disjoint partitions of source *train* data. It kept
+the B6 mixture and continued from B6 for 500 steps. On its clean development
+split, the 2%-false-answer calibration selected threshold 0.665 with 70.65%
+answer coverage and 1.95% false answers (W&B `g2jzx4ix`).
+
+That fixed threshold still refused 93.94% of answerable rows on the already
+observed N0 SQuAD2 diagnostic. This is a **gate-calibration failure**, not a
+reader failure: raw greedy answers reached 41.02% EM on correct contexts while
+wrong and empty raw EM were each 0.39%. A post-hoc diagnostic threshold of 0.30
+would give 78.41% answer coverage and 0.59% false answers there, but it is not
+a valid deployment threshold because it was measured on the diagnostic set.
+
+The next experiment must change the evidence-sufficiency signal or use a
+calibration distribution demonstrably matched to deployment negatives; another
+longer run of the same standalone answerability head is not warranted. The N0
+slice has now been inspected during development and must no longer be presented
+as a final untouched result.

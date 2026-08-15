@@ -41,7 +41,67 @@
         "hallucinated_answer_rate": 0.0
       },
       "finding": "Replay prevents total collapse but does not recover useful strict-threshold coverage on adversarial negatives."
+    },
+    "b4_entity_binding_500": {
+      "wandb_run": "grwz3daz",
+      "data": "60% N2 answerable, 10% entity binding positive, 15% cross-pair, 15% missing entity",
+      "validation_grounded_threshold": 0.185,
+      "validation_grounded_answer_coverage": 0.99528,
+      "validation_grounded_false_answer_rate": 0.01969,
+      "validation_pointer_position_accuracy": 0.89218,
+      "frozen_context": {
+        "correct_em": 0.44921875,
+        "wrong_or_empty_refusal_recall": 0.966796875,
+        "false_refusal_rate": 0.007575757575757576,
+        "hallucinated_answer_rate": 0.033203125
+      },
+      "finding": "Synthetic entity binding learned, but the neutral unsupported password probe was still answered."
+    },
+    "b5_relation_binding_500": {
+      "wandb_run": "a48ta308",
+      "data": "50% N2 answerable, 10% entity positive, 10% relation positive, 10% each cross/entity-missing/relation-missing",
+      "validation_grounded_threshold": 0.7,
+      "validation_grounded_answer_coverage": 0.99601,
+      "validation_grounded_false_answer_rate": 0.019968,
+      "validation_pointer_position_accuracy": 0.91441,
+      "frozen_context": {
+        "correct_em": 0.4453125,
+        "wrong_or_empty_refusal_recall": 0.953125,
+        "false_refusal_rate": 0.007575757575757576,
+        "hallucinated_answer_rate": 0.046875
+      },
+      "finding": "Relation binding improved the synthetic control but did not transfer to a neutral natural unsupported query."
+    },
+    "b6_official_negative_500": {
+      "wandb_run": "u3anbkcw",
+      "data": "B5 replay plus 15% official SQuAD2 unanswerables",
+      "validation_status": "invalid_for_selection: development data used the public SQuAD2 validation partition later used by N0",
+      "diagnostic_context": {
+        "frozen_threshold": 0.855,
+        "raw_correct_em": 0.4375,
+        "false_refusal_rate": 0.9204545454545454
+      }
+    },
+    "b7_clean_split_500": {
+      "wandb_run": "g2jzx4ix",
+      "data": "B6 mixture; train and development are disjoint deterministic partitions of source train data",
+      "validation_grounded_threshold": 0.665,
+      "validation_grounded_answer_coverage": 0.7065024630541872,
+      "validation_grounded_false_answer_rate": 0.01954022988505747,
+      "validation_pointer_position_accuracy": 0.9151424871266748,
+      "diagnostic_context": {
+        "frozen_threshold": 0.665,
+        "raw_correct_em": 0.41015625,
+        "wrong_raw_em": 0.00390625,
+        "empty_raw_em": 0.00390625,
+        "false_refusal_rate": 0.9393939393939394,
+        "post_hoc_threshold_0_3": {
+          "answer_coverage": 0.7840909090909091,
+          "false_answer_rate": 0.005859375
+        }
+      },
+      "finding": "The reader remains useful but the standalone answerability score shifts across the external distribution."
     }
   },
-  "decision": "Stop this distribution family at 500 steps. Next add and evaluate an explicit entity-binding negative stage between cross-pair and official SQuAD2 negatives; do not extend B2 or B3 unchanged."
+  "decision": "Do not extend the standalone answerability-head curriculum unchanged. B6 contaminated the N0 diagnostic through development-split overlap; B7 fixed that split and still showed severe cross-distribution calibration shift. Treat N0 as observed diagnostic data and next test a different grounding signal or a rigorously matched calibration set."
 }
