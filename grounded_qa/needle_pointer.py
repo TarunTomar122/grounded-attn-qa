@@ -48,6 +48,7 @@ class NeedlePointerOutput:
     p_gen: torch.Tensor
     answerability_logits: torch.Tensor | None = None
     evidence_position_logits: torch.Tensor | None = None
+    copy_position_logits: torch.Tensor | None = None
 
     def final_distribution(self, source_ids: torch.Tensor) -> torch.Tensor:
         copy = PointerGenerator.copy_distribution(
@@ -95,7 +96,7 @@ class NeedlePointerModel(NeedleishModel):
         target_valid: torch.Tensor,
     ) -> NeedlePointerOutput:
         hidden = self.decode_hidden(decoder_input_ids, memory, source_valid, target_valid)
-        vocab_logits, copy_probs, p_gen, _ = self.pointer(
+        vocab_logits, copy_probs, p_gen, _, copy_logits = self.pointer(
             hidden,
             memory,
             source_ids,
@@ -103,7 +104,7 @@ class NeedlePointerModel(NeedleishModel):
             self.token_embedding(decoder_input_ids),
             self.token_embedding.weight,
         )
-        return NeedlePointerOutput(vocab_logits, copy_probs, p_gen)
+        return NeedlePointerOutput(vocab_logits, copy_probs, p_gen, copy_position_logits=copy_logits)
 
     def load_backbone_state_dict(self, state: dict[str, torch.Tensor]) -> None:
         # Heads are experimental and may change shape; the pretrained reader and
@@ -121,9 +122,6 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
 
     def __init__(self, cfg: NeedleConfig):
         super().__init__(cfg)
-        self.evidence = nn.Linear(cfg.d_model, 1)
-        nn.init.zeros_(self.evidence.weight)
-        nn.init.zeros_(self.evidence.bias)
         # Start roughly neutral for a typical 256-token context.
         self.no_answer_logit = nn.Parameter(torch.tensor(math.log(256.0)))
 
@@ -144,31 +142,28 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
             context_mask,
             target_valid,
         )
-        evidence_position_logits = self.evidence_position_logits(memory, context_mask)
-        answerability_logits = self.classify_answerability(memory, source_valid, context_mask, evidence_position_logits)
+        evidence_position_logits = self.evidence_position_logits(output.copy_position_logits)
+        answerability_logits = self.classify_answerability(evidence_position_logits)
         return NeedlePointerOutput(
             output.vocab_logits,
             output.copy_position_probs,
             output.p_gen,
             answerability_logits,
             evidence_position_logits,
+            output.copy_position_logits,
         )
 
-    def evidence_position_logits(self, memory: torch.Tensor, context_mask: torch.Tensor) -> torch.Tensor:
-        """Scores a context start position, with index zero reserved for no-answer."""
-        positions = self.evidence(memory).squeeze(-1).masked_fill(~context_mask, float("-inf"))
-        return torch.cat((self.no_answer_logit.expand(len(memory), 1), positions), dim=1)
+    def evidence_position_logits(self, copy_position_logits: torch.Tensor | None) -> torch.Tensor:
+        """Let the BOS pointer select a source start or the single NULL class."""
+        if copy_position_logits is None:
+            raise ValueError("evidence selection requires pointer logits")
+        return torch.cat((self.no_answer_logit.expand(len(copy_position_logits), 1), copy_position_logits[:, 0]), dim=1)
 
     def classify_answerability(
         self,
-        memory: torch.Tensor,
-        source_valid: torch.Tensor,
-        context_mask: torch.Tensor,
-        evidence_position_logits: torch.Tensor | None = None,
+        evidence_position_logits: torch.Tensor,
     ) -> torch.Tensor:
-        del source_valid  # Context already excludes source padding.
-        logits = evidence_position_logits if evidence_position_logits is not None else self.evidence_position_logits(memory, context_mask)
-        return logits[:, 1:].logsumexp(dim=-1) - logits[:, 0]
+        return evidence_position_logits[:, 1:].logsumexp(dim=-1) - evidence_position_logits[:, 0]
 
 
 def evidence_start_targets(gold_copy_positions: torch.Tensor, answerable: torch.Tensor) -> torch.Tensor:

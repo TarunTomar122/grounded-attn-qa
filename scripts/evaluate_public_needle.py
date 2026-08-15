@@ -170,7 +170,14 @@ def main() -> None:
             logits = (
                 interaction_head(answerability_interaction_features(memory, valid, context_mask)).squeeze(-1)
                 if interaction_head is not None
-                else model.classify_answerability(memory, valid, context_mask)
+                else model.classify_answerability(model.evidence_position_logits(model.decode_pointer(
+                    torch.full((len(batch), 1), EOS_ID, dtype=torch.long, device=device),
+                    memory,
+                    source,
+                    valid,
+                    context_mask,
+                    torch.ones((len(batch), 1), dtype=torch.bool, device=device),
+                ).copy_position_logits))
             )
             probabilities = logits.sigmoid().cpu().tolist()
         generated = generate_batch(model, source, valid, args.max_new_tokens, context_mask, memory).cpu().tolist()

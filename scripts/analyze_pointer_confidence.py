@@ -49,8 +49,9 @@ def score_batch(model, tokenizer, rows: list[dict], device: torch.device, max_ne
         context_mask[index, context_start : len(ids)] = True
 
     memory = model.encode(source, valid)
-    head = model.classify_answerability(memory, valid, context_mask).sigmoid()
     decoder = torch.full((len(rows), 1), EOS_ID, dtype=torch.long, device=device)
+    selection = model.decode_pointer(decoder, memory, source, valid, context_mask, torch.ones_like(decoder, dtype=torch.bool))
+    head = model.classify_answerability(model.evidence_position_logits(selection.copy_position_logits)).sigmoid()
     finished = torch.zeros(len(rows), dtype=torch.bool, device=device)
     count = torch.zeros(len(rows), dtype=torch.long, device=device)
     totals = {name: torch.zeros(len(rows), device=device) for name in ("final", "copy_token", "position_peak")}

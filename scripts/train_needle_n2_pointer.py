@@ -231,9 +231,13 @@ def probe(model: NeedlePointerModel, tokenizer: NeedleTokenizer, data, device, c
         indices = torch.cat((labels.nonzero().flatten()[:half], (~labels).nonzero().flatten()[: count - half]))
     source, source_valid, context_mask, _, target, _, _, answerable = batch(data, indices, device)
     memory = model.encode(source, source_valid)
-    probabilities = model.classify_answerability(memory, source_valid, context_mask).sigmoid() if isinstance(model, NeedleAnswerablePointerModel) else torch.ones(len(indices), device=device)
-    answered = probabilities >= threshold
     decoder = torch.full((len(indices), 1), EOS_ID, dtype=torch.long, device=device)
+    if isinstance(model, NeedleAnswerablePointerModel):
+        selection = model.decode_pointer(decoder, memory, source, source_valid, context_mask, torch.ones_like(decoder, dtype=torch.bool))
+        probabilities = model.classify_answerability(model.evidence_position_logits(selection.copy_position_logits)).sigmoid()
+    else:
+        probabilities = torch.ones(len(indices), device=device)
+    answered = probabilities >= threshold
     finished = torch.zeros(len(indices), dtype=torch.bool, device=device)
     for _ in range(128):
         output = model.decode_pointer(decoder, memory, source, source_valid, context_mask, torch.ones_like(decoder, dtype=torch.bool))

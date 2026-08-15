@@ -224,24 +224,17 @@ def test_answerability_head_receives_gradient_without_copy_targets() -> None:
     output = model(source, valid, context, decoder, torch.ones_like(decoder, dtype=torch.bool))
     assert output.answerability_logits is not None
     torch.nn.functional.binary_cross_entropy_with_logits(output.answerability_logits, torch.zeros(1)).backward()
-    assert model.evidence.weight.grad is not None
+    assert model.pointer.pointer_q.weight.grad is not None
     assert model.pointer.gate.weight.grad is None
 
 
-def test_answerability_head_scores_context_positions_against_no_answer() -> None:
+def test_answerability_head_scores_first_pointer_positions_against_no_answer() -> None:
     model = NeedleAnswerablePointerModel(tiny_config())
-    model.evidence.weight.data.zero_()
-    model.evidence.bias.data.zero_()
-    model.evidence.weight.data[0, 0] = 1
     model.no_answer_logit.data.zero_()
-    memory = torch.zeros((2, 3, tiny_config().d_model))
-    memory[0, 1, 0] = 1
-    memory[1, 1, 0] = 3
-    valid = torch.ones((2, 3), dtype=torch.bool)
-    context = torch.tensor([[False, True, True], [False, True, True]])
-    logits = model.classify_answerability(memory, valid, context)
+    pointer_logits = torch.tensor([[[float("-inf"), 1.0, 0.0]], [[float("-inf"), 3.0, 0.0]]])
+    positions = model.evidence_position_logits(pointer_logits)
+    logits = model.classify_answerability(positions)
     assert logits[1] > logits[0]
-    positions = model.evidence_position_logits(memory, context)
     assert positions.shape == (2, 4)
     assert torch.isneginf(positions[:, 1]).all()
 

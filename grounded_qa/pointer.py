@@ -21,7 +21,7 @@ class PointerGenerator(nn.Module):
         context_mask: torch.Tensor,
         previous_embedding: torch.Tensor,
         vocab_weight: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         scores = torch.einsum(
             "btd,bsd->bts",
             self.pointer_q(decoder_state),
@@ -37,7 +37,7 @@ class PointerGenerator(nn.Module):
         ).squeeze(-1)
         p_gen = torch.where(has_context[:, None], p_gen, torch.ones_like(p_gen))
         vocab_logits = decoder_state @ vocab_weight.transpose(0, 1)
-        return vocab_logits, copy_position_probs, p_gen, pointer_context
+        return vocab_logits, copy_position_probs, p_gen, pointer_context, scores
 
     @staticmethod
     def copy_distribution(

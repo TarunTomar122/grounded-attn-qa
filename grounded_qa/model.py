@@ -123,7 +123,7 @@ class GroundedPointerGenerator(nn.Module):
         for block in self.decoder:
             x = block(x, memory, target_valid, source_valid)
         x = self.decoder_final_norm(x)
-        vocab_logits, copy_probs, p_gen, pointer_context = self.pointer(
+        vocab_logits, copy_probs, p_gen, pointer_context, _ = self.pointer(
             x,
             memory,
             source_ids,
