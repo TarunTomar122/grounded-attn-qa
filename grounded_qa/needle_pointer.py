@@ -34,6 +34,13 @@ def candidate_span_features(
     return torch.cat((question, candidate, question * candidate, (question - candidate).abs()), dim=-1)
 
 
+def candidate_verifier_head(d_model: int, hidden_dim: int = 0) -> nn.Module:
+    width = d_model * 4
+    if hidden_dim:
+        return nn.Sequential(nn.Linear(width, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, 1))
+    return nn.Linear(width, 1)
+
+
 @dataclass
 class NeedlePointerOutput:
     vocab_logits: torch.Tensor

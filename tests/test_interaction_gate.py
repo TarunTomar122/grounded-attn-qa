@@ -1,6 +1,6 @@
 import torch
 
-from grounded_qa.needle_pointer import answerability_interaction_features, candidate_span_features
+from grounded_qa.needle_pointer import answerability_interaction_features, candidate_span_features, candidate_verifier_head
 from scripts.probe_interaction_gate import parse_slice
 
 
@@ -24,6 +24,11 @@ def test_candidate_span_features_use_the_proposed_source_span() -> None:
 
     expected = torch.tensor([[1.0, 2.0, 3.0, 4.0, 3.0, 8.0, 2.0, 2.0]])
     torch.testing.assert_close(features, expected)
+
+
+def test_candidate_verifier_head_can_add_a_small_nonlinear_readout() -> None:
+    head = candidate_verifier_head(d_model=2, hidden_dim=3)
+    assert head(torch.ones((4, 8))).shape == (4, 1)
 
 
 def test_parse_slice() -> None:

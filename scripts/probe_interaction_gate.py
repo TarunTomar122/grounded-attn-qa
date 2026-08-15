@@ -6,10 +6,9 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from torch import nn
 
 from grounded_qa.calibration import choose_threshold, sweep_thresholds
-from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, answerability_interaction_features, candidate_span_features
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, answerability_interaction_features, candidate_span_features, candidate_verifier_head
 from grounded_qa.needleish import NeedleConfig
 from scripts.analyze_pointer_confidence import binary_auc
 from scripts.train_needle_n1 import load_split
@@ -67,6 +66,7 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=3.0e-3)
     parser.add_argument("--seed", type=int, default=43)
     parser.add_argument("--candidate-span", action="store_true", help="Pool the proposed context candidate rather than all context tokens.")
+    parser.add_argument("--hidden-dim", type=int, default=0, help="Optional hidden width for a nonlinear verifier readout.")
     parser.add_argument("--slice", action="append", default=[], help="Named validation range, e.g. official:123:456")
     args = parser.parse_args()
 
@@ -92,7 +92,7 @@ def main() -> None:
     train_labels = train["answerable"][train_indices].float()
     validation_labels = validation["answerable"].bool()
 
-    head = nn.Linear(train_features.shape[1], 1)
+    head = candidate_verifier_head(NeedleConfig.public_checkpoint().d_model, args.hidden_dim)
     optimizer = torch.optim.AdamW(head.parameters(), lr=args.lr)
     pos_weight = (len(train_labels) - train_labels.sum()) / train_labels.sum().clamp_min(1)
     for _ in range(args.steps):
@@ -121,6 +121,7 @@ def main() -> None:
         "checkpoint": str(args.checkpoint),
         "train_rows": args.train_rows,
         "features": "[question_mean, candidate_span_mean, product, absolute_difference]" if args.candidate_span else "[question_mean, context_mean, product, absolute_difference]",
+        "hidden_dim": args.hidden_dim,
         "summary": summary,
         "slices": slices,
     }

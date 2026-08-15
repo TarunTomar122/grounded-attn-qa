@@ -5,10 +5,9 @@ import json
 from pathlib import Path, PosixPath
 
 import torch
-from torch import nn
 
 from grounded_qa.negatives import REFUSAL
-from grounded_qa.needle_pointer import NeedlePointerModel, answerability_interaction_features
+from grounded_qa.needle_pointer import NeedlePointerModel, answerability_interaction_features, candidate_verifier_head
 from grounded_qa.needle_qa_data import _evidence_window
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig
@@ -40,6 +39,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--threshold", type=float, required=True)
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--hidden-dim", type=int, default=0, help="Verifier hidden width; must match the head checkpoint.")
     args = parser.parse_args()
 
     report = json.loads(args.input.read_text())
@@ -50,7 +50,7 @@ def main() -> None:
     model = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=dtype)
     model.load_backbone_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
     model.eval()
-    head = nn.Linear(NeedleConfig.public_checkpoint().d_model * 4, 1).to(device=device, dtype=dtype)
+    head = candidate_verifier_head(NeedleConfig.public_checkpoint().d_model, args.hidden_dim).to(device=device, dtype=dtype)
     head.load_state_dict(load_head_state(args.head, device))
     head.eval()
 
