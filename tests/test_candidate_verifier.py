@@ -2,7 +2,7 @@ from pathlib import PosixPath
 
 import torch
 
-from scripts.evaluate_candidate_verifier import candidate_offset, is_answerable, load_head_state, load_verifier_state
+from scripts.evaluate_candidate_verifier import candidate_offset, is_answerable, load_head_state, load_verifier_state, safe_gate_summary
 
 
 def test_candidate_offset_is_case_insensitive() -> None:
@@ -32,3 +32,18 @@ def test_load_verifier_state_accepts_checkpoint_path_metadata(tmp_path) -> None:
     torch.save({"verifier": expected, "args": {"output_dir": PosixPath("runs/example")}}, checkpoint)
     actual = load_verifier_state(checkpoint, torch.device("cpu"))
     assert torch.equal(actual["weight"], expected["weight"])
+
+
+def test_safe_gate_summary_counts_wrong_reader_answers_as_risk() -> None:
+    rows = [
+        {"answerable": True, "em": 1.0, "candidate_accepted": True},
+        {"answerable": True, "em": 1.0, "candidate_accepted": False},
+        {"answerable": True, "em": 0.0, "candidate_accepted": True},
+        {"answerable": False, "em": 0.0, "candidate_accepted": False},
+    ]
+
+    summary = safe_gate_summary(rows)
+
+    assert summary["safe_answer_coverage"] == 1 / 3
+    assert summary["accepted_answer_risk"] == 0.5
+    assert summary["wrong_reader_answer_accept_rate"] == 0.5

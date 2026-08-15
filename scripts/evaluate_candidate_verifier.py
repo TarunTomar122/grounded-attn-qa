@@ -25,6 +25,27 @@ def is_answerable(row: dict) -> bool:
     return bool(row.get("answerable", row.get("condition") in {"correct", "counterfactual"}))
 
 
+def safe_gate_summary(rows: list[dict]) -> dict[str, float | int]:
+    """Measure a gate by retained correct answers and accepted wrong answers."""
+    answerable = [row for row in rows if is_answerable(row)]
+    raw_correct = [row for row in rows if float(row.get("em", 0.0)) == 1.0]
+    raw_wrong = [row for row in rows if float(row.get("em", 0.0)) != 1.0]
+    accepted = [row for row in rows if row["candidate_accepted"]]
+    accepted_correct = [row for row in accepted if float(row.get("em", 0.0)) == 1.0]
+    accepted_wrong = [row for row in accepted if float(row.get("em", 0.0)) != 1.0]
+    return {
+        "rows": len(rows),
+        "accepted": len(accepted),
+        "answer_coverage": sum(row["candidate_accepted"] for row in answerable) / max(len(answerable), 1),
+        "safe_answer_coverage": len(accepted_correct) / max(len(answerable), 1),
+        "accepted_answer_risk": len(accepted_wrong) / max(len(accepted), 1),
+        "wrong_reader_answer_accept_rate": len(accepted_wrong) / max(len(raw_wrong), 1),
+        "correct_reader_answer_refusal_rate": sum(not row["candidate_accepted"] for row in raw_correct) / max(len(raw_correct), 1),
+        "false_refusal_rate": sum(not row["candidate_accepted"] for row in answerable) / max(len(answerable), 1),
+        "false_answer_rate": sum(row["candidate_accepted"] for row in rows if not is_answerable(row)) / max(sum(not is_answerable(row) for row in rows), 1),
+    }
+
+
 def load_head_state(path: Path, device: torch.device) -> dict[str, torch.Tensor]:
     # Training checkpoints retain argparse Paths as harmless metadata.
     with torch.serialization.safe_globals([PosixPath]):
@@ -52,7 +73,10 @@ def main() -> None:
     parser.add_argument("--decoder-verifier", action="store_true", help="Use the adapter's decoder cross-attended verification token.")
     parser.add_argument("--evidence-radius", type=int, default=0, help="Include this many source tokens around the copied span as verifier evidence.")
     parser.add_argument("--claim", action="store_true", help="Render question/candidate as the declarative claim used by NLI training.")
+    parser.add_argument("--joint-checkpoint", type=Path, help="Joint reader/verifier checkpoint; replaces the frozen reader with its shared reader state.")
     args = parser.parse_args()
+    if args.joint_checkpoint and not args.nli:
+        parser.error("--joint-checkpoint requires --nli")
 
     report = json.loads(args.input.read_text())
     rows = report["examples"]
@@ -61,6 +85,9 @@ def main() -> None:
     dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
     model = NeedlePointerModel(NeedleConfig.public_checkpoint()).to(device=device, dtype=dtype)
     model.load_backbone_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
+    joint_state = torch.load(args.joint_checkpoint, map_location=device, weights_only=False) if args.joint_checkpoint else None
+    if joint_state is not None:
+        model.load_backbone_state_dict(joint_state["model"])
     encoder = NeedleVerifierAdapter(model, args.adapter_rank, decoder=args.decoder_verifier).to(device=device, dtype=dtype) if args.adapter_rank else model
     if args.adapter_rank:
         adapter_state = torch.load(args.head, map_location=device, weights_only=False)
@@ -68,7 +95,7 @@ def main() -> None:
         if args.decoder_verifier:
             encoder.decoder_adapters.load_state_dict(adapter_state["decoder_adapter"])
     encoder.eval()
-    state = load_verifier_state(args.head, device) if args.nli else load_head_state(args.head, device)
+    state = joint_state["verifier"] if joint_state is not None else load_verifier_state(args.head, device) if args.nli else load_head_state(args.head, device)
     hidden_dim = state["0.weight"].shape[0] if args.nli and not args.hidden_dim else args.hidden_dim
     head = (
         nn.Sequential(nn.Linear(NeedleConfig.public_checkpoint().d_model if args.decoder_verifier else NeedleConfig.public_checkpoint().d_model * 4, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, 3))
@@ -124,14 +151,7 @@ def main() -> None:
             "candidate_accepted": accepted,
             "prediction": raw if accepted else REFUSAL,
         })
-    answerable = [row for row in verified if is_answerable(row)]
-    unsupported = [row for row in verified if not is_answerable(row)]
-    summary = {
-        "rows": len(verified),
-        "accepted": sum(row["candidate_accepted"] for row in verified),
-        "false_refusal_rate": sum(not row["candidate_accepted"] for row in answerable) / max(len(answerable), 1),
-        "false_answer_rate": sum(row["candidate_accepted"] for row in unsupported) / max(len(unsupported), 1),
-    }
+    summary = safe_gate_summary(verified)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps({"input": str(args.input), "threshold": args.threshold, "summary": summary, "examples": verified}, indent=2, ensure_ascii=False))
     print(json.dumps(summary, indent=2))

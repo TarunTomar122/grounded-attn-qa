@@ -21,13 +21,26 @@ def nli_metrics(logits: torch.Tensor, labels: torch.Tensor) -> dict[str, float]:
     probabilities = logits.softmax(dim=-1)[:, 2].float()
     support = labels.eq(2)
     safe = choose_threshold(sweep_thresholds(probabilities.tolist(), support.tolist()), max_false_answer_rate=0.02)
-    return {
+    predicted = logits.argmax(dim=-1)
+    metrics = {
         "val/nli_accuracy": float(logits.argmax(dim=-1).eq(labels).float().mean()),
         "val/support_auc": binary_auc(probabilities.tolist(), support.tolist()),
         "val/safe_threshold": safe.threshold,
         "val/safe_answer_coverage": safe.answer_coverage,
         "val/safe_false_answer_rate": safe.false_answer_rate,
     }
+    for name, label in (("unknown", 0), ("refute", 1), ("support", 2)):
+        truth = labels.eq(label)
+        chosen = predicted.eq(label)
+        tp = int((truth & chosen).sum())
+        precision = tp / max(int(chosen.sum()), 1)
+        recall = tp / max(int(truth.sum()), 1)
+        metrics[f"val/{name}_precision"] = precision
+        metrics[f"val/{name}_recall"] = recall
+        metrics[f"val/{name}_f1"] = 2 * precision * recall / max(precision + recall, 1e-8)
+        for predicted_name, predicted_label in (("unknown", 0), ("refute", 1), ("support", 2)):
+            metrics[f"val/confusion_{name}_as_{predicted_name}"] = float((truth & predicted.eq(predicted_label)).sum())
+    return metrics
 
 
 def scores(model: nn.Module, verifier: nn.Module, data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.device, *, decoder_verifier: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
