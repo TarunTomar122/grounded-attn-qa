@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from grounded_qa.calibration import choose_threshold, sweep_thresholds
 from grounded_qa.metrics import exact_match, token_f1
 from grounded_qa.negatives import REFUSAL
-from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, evidence_start_loss, evidence_start_targets, pointer_loss
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, evidence_start_loss, evidence_start_targets, negative_eos_loss, pointer_loss
 from grounded_qa.needle_tokenizer import EOS_ID, NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig
 from scripts.train_needle_n1 import load_split, lr_at, optimizers_for
@@ -120,12 +120,26 @@ def answerability_bce_term(
     )
 
 
+def negative_eos_term(
+    output,
+    source_ids: torch.Tensor,
+    answerable: torch.Tensor,
+    *,
+    weight: float,
+    eos_id: int = EOS_ID,
+) -> torch.Tensor:
+    """Return the optional immediate-EOS loss for unanswerable rows only."""
+    if weight == 0.0:
+        return output.vocab_logits.float().sum() * 0
+    return weight * negative_eos_loss(output, source_ids, answerable, eos_id=eos_id)
+
+
 @torch.inference_mode()
 def evaluate(model, data, device, args) -> dict[str, float]:
     model.eval()
     all_probabilities: list[torch.Tensor] = []
     all_answerable: list[torch.Tensor] = []
-    totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "gold_pointer_probability", "p_gen", "wrong_sequence", "wrong_weighted", "answerability_bce", "evidence_start", "evidence_correct", "evidence_positive_rows", "evidence_positive_correct", "evidence_negative_rows", "evidence_negative_correct", "tp", "tn", "fp", "fn", "positive_probability", "negative_probability", "wrong_probability", "wrong_rows")}
+    totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "gold_pointer_probability", "p_gen", "wrong_sequence", "wrong_weighted", "answerability_bce", "evidence_start", "evidence_correct", "evidence_positive_rows", "evidence_positive_correct", "evidence_negative_rows", "evidence_negative_correct", "negative_eos", "negative_eos_correct", "negative_eos_rows", "tp", "tn", "fp", "fn", "positive_probability", "negative_probability", "wrong_probability", "wrong_rows")}
     for start in range(0, len(data["source_ids"]), args.batch_size):
         indices = torch.arange(start, min(start + args.batch_size, len(data["source_ids"])))
         source, source_valid, context_mask, decoder, target, valid, gold, answerable = batch(data, indices, device)
@@ -184,6 +198,12 @@ def evaluate(model, data, device, args) -> dict[str, float]:
             totals["fn"] += int((~predicted & answerable).sum())
             totals["positive_probability"] += float((probability * answerable).sum())
             totals["negative_probability"] += float((probability * ~answerable).sum())
+            negative_rows = int((~answerable).sum())
+            negative_eos = negative_eos_loss(output, source, answerable, eos_id=EOS_ID)
+            eos_distribution = output.final_distribution(source)[:, 0]
+            totals["negative_eos"] += float(negative_eos) * negative_rows
+            totals["negative_eos_correct"] += int((eos_distribution[~answerable].argmax(dim=-1) == EOS_ID).sum())
+            totals["negative_eos_rows"] += negative_rows
             if wrong is not None and wrong.answerability_logits is not None:
                 totals["wrong_probability"] += float(wrong.answerability_logits.sigmoid().sum())
                 totals["wrong_rows"] += rows
@@ -211,7 +231,7 @@ def evaluate(model, data, device, args) -> dict[str, float]:
         refusal_precision = totals["tn"] / max(totals["tn"] + totals["fn"], 1)
         refusal_recall = totals["tn"] / max(negatives, 1)
         metrics.update({
-            "val/loss": metrics["val/loss"] + args.answerability_weight * totals["evidence_start"] / totals["rows"],
+            "val/loss": metrics["val/loss"] + args.answerability_weight * totals["evidence_start"] / totals["rows"] + args.negative_eos_weight * totals["negative_eos"] / max(totals["negative_eos_rows"], 1),
             "val/answerability_bce": totals["answerability_bce"] / totals["rows"],
             "val/evidence_start_nll": totals["evidence_start"] / totals["rows"],
             "val/evidence_choice_accuracy": totals["evidence_correct"] / totals["rows"],
@@ -229,6 +249,8 @@ def evaluate(model, data, device, args) -> dict[str, float]:
             "val/mean_answerable_probability": totals["positive_probability"] / max(positives, 1),
             "val/mean_unanswerable_probability": totals["negative_probability"] / max(negatives, 1),
             "val/wrong_context_answerable_probability": totals["wrong_probability"] / max(totals["wrong_rows"], 1),
+            "val/negative_eos_loss": totals["negative_eos"] / max(totals["negative_eos_rows"], 1),
+            "val/negative_eos_accuracy": totals["negative_eos_correct"] / max(totals["negative_eos_rows"], 1),
         })
         calibrated = calibrate_answerability(torch.cat(all_probabilities), torch.cat(all_answerable))
         metrics.update({f"val/calibrated_{key}": value for key, value in calibrated.items()})
@@ -252,6 +274,7 @@ def probe(model: NeedlePointerModel, tokenizer: NeedleTokenizer, data, device, c
         probabilities = model.classify_answerability(model.evidence_position_logits(selection.copy_position_logits)).sigmoid()
     else:
         probabilities = torch.ones(len(indices), device=device)
+    answerability_enabled = isinstance(model, NeedleAnswerablePointerModel)
     answered = probabilities >= threshold
     finished = torch.zeros(len(indices), dtype=torch.bool, device=device)
     for _ in range(128):
@@ -273,7 +296,8 @@ def probe(model: NeedlePointerModel, tokenizer: NeedleTokenizer, data, device, c
         generated = generated[: generated.index(EOS_ID)] if emitted_eos else generated
         gold = gold[: gold.index(EOS_ID)] if EOS_ID in gold else [token for token in gold if token]
         prediction, answer = tokenizer.decode(generated).strip(), tokenizer.decode(gold).strip()
-        rows.append({"prediction": prediction if should_answer else REFUSAL, "raw_prediction": prediction, "gold": answer, "answerable": label, "p_answerable": probability, "refused": not should_answer, "eos": emitted_eos, "tokens": len(generated)})
+        refused = not should_answer or (answerability_enabled and not prediction)
+        rows.append({"prediction": REFUSAL if refused else prediction, "raw_prediction": prediction, "gold": answer, "answerable": label, "p_answerable": probability, "refused": refused, "eos": emitted_eos, "tokens": len(generated)})
     model.train()
     answerable_rows = [row for row in rows if row["answerable"]]
     negative_rows = [row for row in rows if not row["answerable"]]
@@ -334,6 +358,7 @@ def main() -> None:
     parser.add_argument("--evaluate-only", action="store_true")
     parser.add_argument("--answerability-weight", type=float, default=0.0)
     parser.add_argument("--answerability-bce-weight", type=float, default=0.0)
+    parser.add_argument("--negative-eos-weight", type=float, default=0.0)
     parser.add_argument("--answerability-pos-weight", type=float)
     parser.add_argument("--answerability", action="store_true")
     args = parser.parse_args()
@@ -341,6 +366,8 @@ def main() -> None:
         parser.error("--answerability-weight requires --answerability")
     if args.answerability_bce_weight and not args.answerability:
         parser.error("--answerability-bce-weight requires --answerability")
+    if args.negative_eos_weight and not args.answerability:
+        parser.error("--negative-eos-weight requires --answerability")
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -422,7 +449,19 @@ def main() -> None:
             pos_weight=answerability_pos_weight,
             weight=args.answerability_bce_weight,
         )
-        total_loss = loss.total + args.answerability_weight * evidence_loss + answerability_bce
+        negative_eos_weighted = negative_eos_term(
+            output,
+            source,
+            answerable,
+            weight=args.negative_eos_weight,
+            eos_id=EOS_ID,
+        )
+        negative_eos = (
+            negative_eos_weighted / args.negative_eos_weight
+            if args.negative_eos_weight
+            else output.vocab_logits.float().sum() * 0
+        )
+        total_loss = loss.total + args.answerability_weight * evidence_loss + answerability_bce + negative_eos_weighted
         total_loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         for optimizer in optimizers.values():
@@ -442,6 +481,8 @@ def main() -> None:
                 "train/evidence_choice_accuracy": float(output.evidence_position_logits.argmax(dim=-1).eq(evidence_target).float().mean()) if evidence_target is not None else 0.0,
                 "train/answerability_bce": float(F.binary_cross_entropy_with_logits(output.answerability_logits, answerable.float()).detach()) if output.answerability_logits is not None else 0.0,
                 "train/answerability_bce_term": float(answerability_bce.detach()),
+                "train/negative_eos_loss": float(negative_eos.detach()),
+                "train/negative_eos_term": float(negative_eos_weighted.detach()),
                 "train/answerability_accuracy": float((output.answerability_logits.ge(0) == answerable).float().mean()) if output.answerability_logits is not None else 0.0,
                 "train/grad_norm": float(grad_norm),
                 "train/adam_lr": adam_lr,

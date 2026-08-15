@@ -5,13 +5,13 @@ import math
 import torch
 import pytest
 
-from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput, evidence_start_loss, evidence_start_targets, pointer_loss
+from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput, evidence_start_loss, evidence_start_targets, negative_eos_loss, pointer_loss
 from grounded_qa.needle_tokenizer import SPECIAL_TOKENS
 from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, NeedleishModel
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
 from grounded_qa.synth_data import encode_synth_row, source_bucket, split_for_source
 from scripts.evaluate_public_needle import apply_refusal, generate_batch, summarize
-from scripts.train_needle_n2_pointer import answerability_bce_term, calibrate_answerability, swap_contexts
+from scripts.train_needle_n2_pointer import answerability_bce_term, calibrate_answerability, negative_eos_term, swap_contexts
 
 
 def tiny_config() -> NeedleConfig:
@@ -191,6 +191,11 @@ def test_evaluator_refuses_below_answerability_threshold() -> None:
     assert apply_refusal("unsupported guess", 0.2, 0.5) == "I don't know this."
 
 
+def test_evaluator_refuses_empty_answerability_prediction() -> None:
+    assert apply_refusal("", 0.9, 0.5) == "I don't know this."
+    assert apply_refusal("   ", 0.9, 0.5) == "I don't know this."
+
+
 def test_plain_evaluator_ignores_answerability_labels_without_gate_decisions() -> None:
     row = {
         "condition": "correct",
@@ -269,6 +274,48 @@ def test_zero_answerability_bce_weight_preserves_base_loss() -> None:
     total_loss.backward()
     assert base_loss.grad is not None and base_loss.grad.item() == 1
     assert logits.grad is None
+
+
+def test_negative_eos_loss_is_finite_and_reaches_generator() -> None:
+    model = NeedlePointerModel(tiny_config())
+    source = torch.tensor([[4, 5, 6], [7, 8, 9]])
+    valid = torch.ones_like(source, dtype=torch.bool)
+    context = torch.tensor([[False, True, True], [False, True, True]])
+    decoder = torch.tensor([[1], [1]])
+    output = model(source, valid, context, decoder, torch.ones_like(decoder, dtype=torch.bool))
+    loss = negative_eos_loss(output, source, torch.tensor([True, False]))
+
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert model.pointer.gate.weight.grad is not None
+    assert model.pointer.gate.weight.grad.abs().sum() > 0
+
+
+def test_negative_eos_loss_ignores_answerable_rows() -> None:
+    model = NeedlePointerModel(tiny_config())
+    source = torch.tensor([[4, 5, 6], [7, 8, 9]])
+    valid = torch.ones_like(source, dtype=torch.bool)
+    context = torch.tensor([[False, True, True], [False, True, True]])
+    decoder = torch.tensor([[1], [1]])
+    output = model(source, valid, context, decoder, torch.ones_like(decoder, dtype=torch.bool))
+    negatives = negative_eos_loss(output, source, torch.tensor([False, False]))
+    answerable_only = negative_eos_loss(output, source, torch.tensor([True, True]))
+
+    assert torch.isfinite(negatives)
+    torch.testing.assert_close(answerable_only, output.vocab_logits.float().sum() * 0)
+
+
+def test_negative_eos_zero_weight_preserves_base_loss() -> None:
+    model = NeedlePointerModel(tiny_config())
+    source = torch.tensor([[4, 5, 6]])
+    valid = torch.ones_like(source, dtype=torch.bool)
+    context = torch.tensor([[False, True, True]])
+    decoder = torch.tensor([[1]])
+    output = model(source, valid, context, decoder, torch.ones_like(decoder, dtype=torch.bool))
+    base_loss = torch.tensor(2.5, requires_grad=True)
+    term = negative_eos_term(output, source, torch.tensor([False]), weight=0.0)
+
+    torch.testing.assert_close(base_loss + term, base_loss)
 
 
 def test_answerability_head_scores_first_pointer_positions_against_conditioned_null() -> None:

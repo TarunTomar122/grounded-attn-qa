@@ -215,6 +215,21 @@ def evidence_start_loss(output: NeedlePointerOutput, gold_copy_positions: torch.
     return F.cross_entropy(output.evidence_position_logits.float(), evidence_start_targets(gold_copy_positions, answerable))
 
 
+def negative_eos_loss(
+    output: NeedlePointerOutput,
+    source_ids: torch.Tensor,
+    answerable: torch.Tensor,
+    *,
+    eos_id: int = 1,
+) -> torch.Tensor:
+    """Train the decoder/generator to terminate immediately on negative rows."""
+    negative = ~answerable
+    if not negative.any():
+        return output.vocab_logits.float().sum() * 0
+    probability = output.final_distribution(source_ids)[:, 0, eos_id].float()
+    return -probability[negative].clamp_min(1.0e-8).log().mean()
+
+
 @dataclass
 class NeedlePointerLoss:
     total: torch.Tensor

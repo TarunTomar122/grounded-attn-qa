@@ -22,7 +22,7 @@ from grounded_qa.needleish import NeedleConfig, NeedleishModel, load_public_chec
 
 
 def apply_refusal(prediction: str, probability: float, threshold: float) -> str:
-    return prediction if probability >= threshold else REFUSAL
+    return prediction if prediction.strip() and probability >= threshold else REFUSAL
 
 
 @torch.inference_mode()
@@ -186,6 +186,8 @@ def main() -> None:
             if eos:
                 ids = ids[: ids.index(EOS_ID)]
             raw_prediction = tokenizer.decode(ids).strip()
+            gate_refusal = args.answerability and probability < args.answerability_threshold
+            empty_refusal = args.answerability and not raw_prediction
             prediction = apply_refusal(raw_prediction, probability, args.answerability_threshold) if args.answerability else raw_prediction
             em = max(exact_match(prediction, answer) for answer in row["answers"])
             f1 = max(token_f1(prediction, answer) for answer in row["answers"])
@@ -205,7 +207,7 @@ def main() -> None:
                     "raw_prediction": raw_prediction,
                     "p_answerable": probability,
                     "answerable": row.get("answerable", row["condition"] in {"correct", "counterfactual"}),
-                    "refused": probability < args.answerability_threshold,
+                    "refused": gate_refusal or empty_refusal,
                 })
             results.append(result)
 
