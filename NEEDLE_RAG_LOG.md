@@ -397,3 +397,53 @@ head as sufficient natural-QA evidence tests on this checkpoint. The reader
 can still be used as a provenance-constrained copier, but a genuinely grounded
 RAG decision will require an answer-conditioned verifier or a stronger reader,
 rather than more iterations of these heads.
+
+### N3 candidate-verifier result
+
+The next control changed the question from “is this context answerable?” to
+“does this specific candidate answer this question in this context?” Candidate
+inputs are rendered as a question, proposed answer, and an evidence window
+centered on the candidate. This follows the selective-QA framing in
+[Chen, Choi, and Durrett (2021)](https://aclanthology.org/2021.findings-emnlp.324/),
+which treats answer verification as a premise/hypothesis support decision.
+
+The first data set used one correct answer, one unrelated in-context span, and
+one unanswerable question with an in-context span for each matched SQuAD2
+paragraph: 24,846 train rows and 1,257 context-disjoint validation rows. A
+frozen B7 encoder plus the existing question/context/product/difference linear
+readout reached AUC 0.8769 and 33.17% safe coverage at 1.79% false accepts.
+That attractive in-distribution number did not transfer: its handwritten probe
+accepted the obvious Comet Bay tag but rejected three valid answers and accepted
+the unsupported engineer candidate. Fine-tuning the B7 encoder for 2,000 steps
+was tracked in W&B run `u15ptheq`; validation AUC reached only 0.8049 and safe
+coverage 20.76% at 1.79% false accepts, below the frozen control.
+
+The decisive follow-up eliminated the artificial-span mismatch. Script
+`scripts/prepare_needle_n3_reader_candidates.py` created matched SQuAD2 inputs
+and generated candidates with the actual frozen N2-PG reader. It used 8,697
+paragraphs, 16,560 train questions and 834 context-disjoint validation
+questions. Runtime refuses nonliteral candidates by contract; of the remaining
+literal candidates, the tensor data contains 16,394 train rows (3,764 supported
+and 12,630 unsupported) and 829 validation rows (193 supported and 636
+unsupported). Dataset and reader-report SHA-256 hashes are retained in
+`/root/autodl-tmp/datasets/n3-reader-candidates/n3-reader-candidates-manifest.json`
+on the remote persistent volume.
+
+This realistic test produced the clearest negative result so far. A frozen N2
+encoder with the same pooled linear readout achieved only AUC 0.6290 and 4.66%
+safe coverage at 1.73% false accepts. End-to-end on the already-observed N0
+diagnostic it accepted 6 of 776 candidates: 97.73% false refusal on answerable
+conditions and 0% false acceptance on unsupported conditions. It accepted none
+of the five handwritten cases. The raw N2 reader itself remains useful
+(`49.22%` correct-context EM on N0), so this is a verifier-decision failure,
+not evidence that copying disappeared.
+
+We will not run another pooled linear verifier. The current readout pools the
+question and the whole context but does not explicitly pool the proposed source
+span. The next bounded experiment is a candidate-span-aware cross-attention
+verifier: score the question representation against the exact candidate span
+representation in its evidence window, using reader-generated candidates and a
+context-disjoint calibration split. This is the direct missing component in our
+implementation and aligns with answer-verification work that jointly models
+support/refute/neutral relations rather than treating a candidate as a global
+context label ([Zhang, Vu, and Moschitti, 2021](https://aclanthology.org/2021.acl-long.252/)).
