@@ -136,7 +136,11 @@ def main() -> None:
         else:
             load_public_checkpoint(model, args.checkpoint)
     else:
-        model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model"])
+        state = torch.load(args.checkpoint, map_location=device, weights_only=False)["model"]
+        if pointer:
+            model.load_backbone_state_dict(state)
+        else:
+            model.load_state_dict(state)
     model.eval()
     interaction_head = None
     if args.interaction_head:

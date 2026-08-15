@@ -228,6 +228,29 @@ def test_answerability_head_receives_gradient_without_copy_targets() -> None:
     assert model.pointer.gate.weight.grad is None
 
 
+def test_answerability_head_reads_context_interaction() -> None:
+    model = NeedleAnswerablePointerModel(tiny_config())
+    model.answerability.weight.data.zero_()
+    model.answerability.bias.data.zero_()
+    model.answerability.weight.data[0, tiny_config().d_model] = 1
+    memory = torch.zeros((2, 3, tiny_config().d_model))
+    memory[0, 1, 0] = 1
+    memory[1, 1, 0] = 3
+    valid = torch.ones((2, 3), dtype=torch.bool)
+    context = torch.tensor([[False, True, True], [False, True, True]])
+    logits = model.classify_answerability(memory, valid, context)
+    torch.testing.assert_close(logits, torch.tensor([0.5, 1.5]))
+
+
+def test_backbone_loader_ignores_legacy_answerability_head() -> None:
+    model = NeedleAnswerablePointerModel(tiny_config())
+    state = model.state_dict()
+    state["token_embedding.weight"] = torch.ones_like(state["token_embedding.weight"])
+    state["answerability.weight"] = torch.zeros((1, tiny_config().d_model))
+    model.load_backbone_state_dict(state)
+    assert torch.equal(model.token_embedding.weight, torch.ones_like(model.token_embedding.weight))
+
+
 def test_wrong_context_swap_preserves_questions() -> None:
     source = torch.tensor([[10, 5, 20, 21, 0], [11, 12, 5, 30, 31]])
     valid = source.ne(0)

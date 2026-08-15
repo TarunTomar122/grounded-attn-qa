@@ -83,7 +83,11 @@ class NeedlePointerModel(NeedleishModel):
         return NeedlePointerOutput(vocab_logits, copy_probs, p_gen)
 
     def load_backbone_state_dict(self, state: dict[str, torch.Tensor]) -> None:
-        missing, unexpected = self.load_state_dict(state, strict=False)
+        # Heads are experimental and may change shape; the pretrained reader and
+        # pointer must still match exactly when resuming an older checkpoint.
+        expected = self.state_dict()
+        compatible = {name: value for name, value in state.items() if name in expected and expected[name].shape == value.shape}
+        missing, unexpected = self.load_state_dict(compatible, strict=False)
         if unexpected or any(not name.startswith(("pointer.", "answerability.")) for name in missing):
             raise ValueError(f"Backbone checkpoint mismatch: missing={missing}, unexpected={unexpected}")
 
@@ -93,7 +97,7 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
 
     def __init__(self, cfg: NeedleConfig):
         super().__init__(cfg)
-        self.answerability = nn.Linear(cfg.d_model, 1)
+        self.answerability = nn.Linear(cfg.d_model * 4, 1)
         self.answerability.apply(self._init)
         nn.init.zeros_(self.answerability.bias)
 
@@ -128,9 +132,7 @@ class NeedleAnswerablePointerModel(NeedlePointerModel):
         source_valid: torch.Tensor,
         context_mask: torch.Tensor,
     ) -> torch.Tensor:
-        question_mask = source_valid & ~context_mask
-        pooled = (memory * question_mask[..., None]).sum(dim=1) / question_mask.sum(dim=1, keepdim=True).clamp_min(1)
-        return self.answerability(pooled).squeeze(-1)
+        return self.answerability(answerability_interaction_features(memory, source_valid, context_mask)).squeeze(-1)
 
 
 @dataclass
