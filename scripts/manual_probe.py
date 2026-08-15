@@ -8,6 +8,7 @@ import torch
 
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig, NeedleishModel
+from grounded_qa.negatives import REFUSAL
 from scripts.train_foundation import generate_probe, probe_summary
 
 
@@ -24,7 +25,7 @@ def main() -> None:
         ("date", "On what date did the Lattice Ferry open?", "The Lattice Ferry opened to public service on 3 March 2042 after its safety review. Its first prototype sailed in 2040.", "The Lattice Ferry opened on 3 March 2042.", "3 March 2042"),
         ("entity-binding", "What is Rhea's station code?", "Rhea's station code is 631. Rilo's station code is 284. Rhea monitors archives, while Rilo monitors dispatch.", "The context states Rhea's station code is 631.", "631"),
         ("quantity", "How many sealed reels were logged in crate M-7?", "Crate M-7 contained 241 sealed reels during the evening inventory. Crate M-6 contained 119 reels.", "Crate M-7 contained 241 sealed reels.", "241"),
-        ("unanswerable", "Which official authorized the sealed transfer?", "The transfer record lists reference ST-92 and a destination in East Annex. It records no authorizing official.", "The context does not name an authorizing official.", "I don't know"),
+        ("unanswerable", "Which official authorized the sealed transfer?", "The transfer record lists reference ST-92 and a destination in East Annex. It records no authorizing official.", "The context does not name an authorizing official.", REFUSAL),
     ]
     model = NeedleishModel(NeedleConfig()).cuda()
     state = torch.load(args.checkpoint, map_location="cuda", weights_only=False)

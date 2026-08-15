@@ -10,6 +10,7 @@ import torch
 from torch import nn
 
 from grounded_qa.metrics import exact_match, repeated_ngram_rate, token_f1, unsupported_entity_rate, unsupported_number_rate
+from grounded_qa.negatives import REFUSAL
 from grounded_qa.needle_pointer import (
     NeedleAnswerablePointerModel,
     NeedlePointerModel,
@@ -21,7 +22,7 @@ from grounded_qa.needleish import NeedleConfig, NeedleishModel, load_public_chec
 
 
 def apply_refusal(prediction: str, probability: float, threshold: float) -> str:
-    return prediction if probability >= threshold else "I don't know"
+    return prediction if probability >= threshold else REFUSAL
 
 
 @torch.inference_mode()

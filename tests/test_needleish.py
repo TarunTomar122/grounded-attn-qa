@@ -184,7 +184,7 @@ def test_pointer_evaluator_decodes() -> None:
 
 def test_evaluator_refuses_below_answerability_threshold() -> None:
     assert apply_refusal("copied answer", 0.8, 0.5) == "copied answer"
-    assert apply_refusal("unsupported guess", 0.2, 0.5) == "I don't know"
+    assert apply_refusal("unsupported guess", 0.2, 0.5) == "I don't know this."
 
 
 def test_plain_evaluator_ignores_answerability_labels_without_gate_decisions() -> None:

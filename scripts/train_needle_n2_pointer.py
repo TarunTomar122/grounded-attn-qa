@@ -12,6 +12,7 @@ import torch.nn.functional as F
 
 from grounded_qa.calibration import choose_threshold, sweep_thresholds
 from grounded_qa.metrics import exact_match, token_f1
+from grounded_qa.negatives import REFUSAL
 from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, evidence_start_loss, evidence_start_targets, pointer_loss
 from grounded_qa.needle_tokenizer import EOS_ID, NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig
@@ -253,7 +254,7 @@ def probe(model: NeedlePointerModel, tokenizer: NeedleTokenizer, data, device, c
         generated = generated[: generated.index(EOS_ID)] if emitted_eos else generated
         gold = gold[: gold.index(EOS_ID)] if EOS_ID in gold else [token for token in gold if token]
         prediction, answer = tokenizer.decode(generated).strip(), tokenizer.decode(gold).strip()
-        rows.append({"prediction": prediction if should_answer else "I don't know", "raw_prediction": prediction, "gold": answer, "answerable": label, "p_answerable": probability, "refused": not should_answer, "eos": emitted_eos, "tokens": len(generated)})
+        rows.append({"prediction": prediction if should_answer else REFUSAL, "raw_prediction": prediction, "gold": answer, "answerable": label, "p_answerable": probability, "refused": not should_answer, "eos": emitted_eos, "tokens": len(generated)})
     model.train()
     answerable_rows = [row for row in rows if row["answerable"]]
     negative_rows = [row for row in rows if not row["answerable"]]
