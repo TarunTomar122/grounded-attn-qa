@@ -34,8 +34,11 @@ def matched_pairs(data: dict[str, torch.Tensor]) -> torch.Tensor:
     return torch.tensor(pairs, dtype=torch.long)
 
 
-def contrastive_loss(positive: torch.Tensor, negative: torch.Tensor, margin: float = 0.2) -> torch.Tensor:
-    return F.softplus(negative - positive + margin).mean()
+def contrastive_loss(positive: torch.Tensor, negative: torch.Tensor, margin: float = 0.2, temperature: float = 1.0) -> torch.Tensor:
+    """Rank the matched span above the same-context hard negative."""
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    return F.softplus((negative - positive + margin) / temperature).mean()
 
 
 def _mean(memory: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -68,7 +71,7 @@ def span_scores(model: NeedlePointerModel, data: dict[str, torch.Tensor], pairs:
 
 
 @torch.inference_mode()
-def evaluate_binding(model: NeedlePointerModel, data: dict[str, torch.Tensor], pairs: torch.Tensor, device: torch.device, batch_size: int) -> dict[str, float]:
+def evaluate_binding(model: NeedlePointerModel, data: dict[str, torch.Tensor], pairs: torch.Tensor, device: torch.device, batch_size: int, margin: float = 0.2, temperature: float = 1.0) -> dict[str, float]:
     model.eval()
     positives, negatives = [], []
     for start in range(0, len(pairs), batch_size):
@@ -77,7 +80,7 @@ def evaluate_binding(model: NeedlePointerModel, data: dict[str, torch.Tensor], p
         negatives.append(negative.float().cpu())
     model.train()
     positive, negative = torch.cat(positives), torch.cat(negatives)
-    return {"binding/pair_accuracy": float(positive.gt(negative).float().mean()), "binding/positive_score": float(positive.mean()), "binding/negative_score": float(negative.mean()), "binding/loss": float(contrastive_loss(positive, negative))}
+    return {"binding/pair_accuracy": float(positive.gt(negative).float().mean()), "binding/positive_score": float(positive.mean()), "binding/negative_score": float(negative.mean()), "binding/loss": float(contrastive_loss(positive, negative, margin, temperature))}
 
 
 def main() -> None:
@@ -93,6 +96,7 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-6)
     parser.add_argument("--binding-ratio", type=float, default=0.5)
     parser.add_argument("--margin", type=float, default=0.2)
+    parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=47)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--run-name", default="needle26m-span-binding-2000")
@@ -116,7 +120,7 @@ def main() -> None:
         import wandb
 
         run = wandb.init(project="grounded-attn-qa", group="needle-rag", name=args.run_name, config={key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()})
-    initial = {**evaluate_reader(model, reader_validation, device, args.batch_size, args.reader_eval_rows), **evaluate_binding(model, matched_validation, pairs_validation, device, args.batch_size)}
+    initial = {**evaluate_reader(model, reader_validation, device, args.batch_size, args.reader_eval_rows), **evaluate_binding(model, matched_validation, pairs_validation, device, args.batch_size, args.margin, args.temperature)}
     baseline_pointer = initial["reader/pointer_position_accuracy"]
     print(json.dumps({"step": 0, **initial}), flush=True)
     if run:
@@ -127,7 +131,7 @@ def main() -> None:
         if torch.rand((), generator=generator).item() < args.binding_ratio:
             indices = torch.randint(len(pairs_train), (args.batch_size,), generator=generator)
             positive, negative = span_scores(model, matched_train, pairs_train[indices], device)
-            loss = contrastive_loss(positive, negative, args.margin)
+            loss = contrastive_loss(positive, negative, args.margin, args.temperature)
             train_metrics = {"train/task": "binding", "train/binding_loss": float(loss.detach()), "train/binding_pair_accuracy": float(positive.gt(negative).float().mean())}
         else:
             indices = torch.randint(len(reader_train["source_ids"]), (args.batch_size,), generator=generator)
@@ -144,7 +148,7 @@ def main() -> None:
             if run:
                 run.log(train_metrics, step=step)
         if step % args.eval_every == 0 or step == args.steps:
-            metrics = {**evaluate_reader(model, reader_validation, device, args.batch_size, args.reader_eval_rows), **evaluate_binding(model, matched_validation, pairs_validation, device, args.batch_size)}
+            metrics = {**evaluate_reader(model, reader_validation, device, args.batch_size, args.reader_eval_rows), **evaluate_binding(model, matched_validation, pairs_validation, device, args.batch_size, args.margin, args.temperature)}
             metrics["reader/pointer_accuracy_delta"] = metrics["reader/pointer_position_accuracy"] - baseline_pointer
             print(json.dumps({"step": step, **metrics}), flush=True)
             if run:
