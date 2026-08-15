@@ -17,7 +17,7 @@ from grounded_qa.needle_qa_data import (
 )
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, TARGET_LENGTH, tensorize
 from scripts.prepare_needle_n3 import cross_pair_negatives
-from scripts.prepare_needle_n3_entity import prepare_entity_binding_pairs
+from scripts.prepare_needle_n3_entity import prepare_entity_binding_pairs, prepare_relation_binding_pairs
 
 
 @dataclass
@@ -222,6 +222,22 @@ class NeedleQADataTests(unittest.TestCase):
             self.assertEqual(unanswerable.target_ids, [1])
             self.assertTrue(all(position == -1 for position in unanswerable.gold_copy_positions))
             self.assertEqual(
+                answerable.source_ids[answerable.context_start :],
+                unanswerable.source_ids[unanswerable.context_start :],
+            )
+
+    def test_relation_binding_pairs_keep_subject_and_remove_requested_fact(self) -> None:
+        positive, negative = prepare_relation_binding_pairs(3, FakeTokenizer(), seed=11)
+
+        for answerable, unanswerable in zip(positive, negative):
+            self.assertGreater(len(answerable.target_ids), 1)
+            self.assertEqual(unanswerable.target_ids, [1])
+            self.assertTrue(all(position == -1 for position in unanswerable.gold_copy_positions))
+            self.assertEqual(
+                answerable.source_ids[: answerable.context_start],
+                unanswerable.source_ids[: unanswerable.context_start],
+            )
+            self.assertNotEqual(
                 answerable.source_ids[answerable.context_start :],
                 unanswerable.source_ids[unanswerable.context_start :],
             )
