@@ -20,6 +20,10 @@ def candidate_offset(context: str, candidate: str) -> int:
     return context.lower().find(candidate.lower())
 
 
+def is_answerable(row: dict) -> bool:
+    return bool(row.get("answerable", row.get("condition") in {"correct", "counterfactual"}))
+
+
 def load_head_state(path: Path, device: torch.device) -> dict[str, torch.Tensor]:
     # Training checkpoints retain argparse Paths as harmless metadata.
     with torch.serialization.safe_globals([PosixPath]):
@@ -87,8 +91,8 @@ def main() -> None:
             "candidate_accepted": accepted,
             "prediction": raw if accepted else REFUSAL,
         })
-    answerable = [row for row in verified if row.get("answerable")]
-    unsupported = [row for row in verified if row.get("answerable") is False]
+    answerable = [row for row in verified if is_answerable(row)]
+    unsupported = [row for row in verified if not is_answerable(row)]
     summary = {
         "rows": len(verified),
         "accepted": sum(row["candidate_accepted"] for row in verified),
