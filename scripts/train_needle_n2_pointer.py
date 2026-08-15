@@ -105,6 +105,21 @@ def calibrate_answerability(probabilities: torch.Tensor, answerable: torch.Tenso
     }
 
 
+def answerability_bce_term(
+    logits: torch.Tensor | None,
+    answerable: torch.Tensor,
+    *,
+    pos_weight: torch.Tensor | None,
+    weight: float,
+) -> torch.Tensor:
+    """Return the optional deployed answerability loss term."""
+    if logits is None or weight == 0.0:
+        return answerable.new_zeros((), dtype=torch.float32)
+    return weight * F.binary_cross_entropy_with_logits(
+        logits.float(), answerable.float(), pos_weight=pos_weight
+    )
+
+
 @torch.inference_mode()
 def evaluate(model, data, device, args) -> dict[str, float]:
     model.eval()
@@ -318,11 +333,14 @@ def main() -> None:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--evaluate-only", action="store_true")
     parser.add_argument("--answerability-weight", type=float, default=0.0)
+    parser.add_argument("--answerability-bce-weight", type=float, default=0.0)
     parser.add_argument("--answerability-pos-weight", type=float)
     parser.add_argument("--answerability", action="store_true")
     args = parser.parse_args()
     if args.answerability_weight and not args.answerability:
         parser.error("--answerability-weight requires --answerability")
+    if args.answerability_bce_weight and not args.answerability:
+        parser.error("--answerability-bce-weight requires --answerability")
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -398,7 +416,13 @@ def main() -> None:
         loss = pointer_loss(output, source, target, loss_valid, gold, z_weight=args.z_loss, pointer_weight=args.pointer_weight, first_token_weight=args.first_token_weight, eos_token_weight=args.eos_token_weight)
         evidence_loss = evidence_start_loss(output, gold, answerable) if output.evidence_position_logits is not None else loss.total.new_zeros(())
         evidence_target = evidence_start_targets(gold, answerable) if output.evidence_position_logits is not None else None
-        total_loss = loss.total + args.answerability_weight * evidence_loss
+        answerability_bce = answerability_bce_term(
+            output.answerability_logits,
+            answerable,
+            pos_weight=answerability_pos_weight,
+            weight=args.answerability_bce_weight,
+        )
+        total_loss = loss.total + args.answerability_weight * evidence_loss + answerability_bce
         total_loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         for optimizer in optimizers.values():
@@ -417,6 +441,7 @@ def main() -> None:
                 "train/evidence_start_nll": float(evidence_loss.detach()),
                 "train/evidence_choice_accuracy": float(output.evidence_position_logits.argmax(dim=-1).eq(evidence_target).float().mean()) if evidence_target is not None else 0.0,
                 "train/answerability_bce": float(F.binary_cross_entropy_with_logits(output.answerability_logits, answerable.float()).detach()) if output.answerability_logits is not None else 0.0,
+                "train/answerability_bce_term": float(answerability_bce.detach()),
                 "train/answerability_accuracy": float((output.answerability_logits.ge(0) == answerable).float().mean()) if output.answerability_logits is not None else 0.0,
                 "train/grad_norm": float(grad_norm),
                 "train/adam_lr": adam_lr,

@@ -9,7 +9,7 @@ from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, Needleish
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
 from grounded_qa.synth_data import encode_synth_row, source_bucket, split_for_source
 from scripts.evaluate_public_needle import apply_refusal, generate_batch, summarize
-from scripts.train_needle_n2_pointer import calibrate_answerability, swap_contexts
+from scripts.train_needle_n2_pointer import answerability_bce_term, calibrate_answerability, swap_contexts
 
 
 def tiny_config() -> NeedleConfig:
@@ -226,6 +226,43 @@ def test_answerability_head_receives_gradient_without_copy_targets() -> None:
     torch.nn.functional.binary_cross_entropy_with_logits(output.answerability_logits, torch.zeros(1)).backward()
     assert model.pointer.pointer_q.weight.grad is not None
     assert model.pointer.gate.weight.grad is None
+
+
+def test_answerability_bce_term_is_finite_and_reaches_pointer() -> None:
+    model = NeedleAnswerablePointerModel(tiny_config())
+    source = torch.tensor([[4, 5, 6], [7, 8, 9]])
+    valid = torch.ones_like(source, dtype=torch.bool)
+    context = torch.tensor([[False, True, True], [False, True, True]])
+    decoder = torch.tensor([[1], [1]])
+    output = model(source, valid, context, decoder, torch.ones_like(decoder, dtype=torch.bool))
+    term = answerability_bce_term(
+        output.answerability_logits,
+        torch.tensor([True, False]),
+        pos_weight=torch.tensor(2.0),
+        weight=0.5,
+    )
+
+    assert torch.isfinite(term)
+    term.backward()
+    assert model.pointer.pointer_q.weight.grad is not None
+    assert model.pointer.pointer_q.weight.grad.abs().sum() > 0
+
+
+def test_zero_answerability_bce_weight_preserves_base_loss() -> None:
+    base_loss = torch.tensor(2.5, requires_grad=True)
+    logits = torch.tensor([0.0], requires_grad=True)
+    term = answerability_bce_term(
+        logits,
+        torch.tensor([True]),
+        pos_weight=torch.tensor(2.0),
+        weight=0.0,
+    )
+    total_loss = base_loss + term
+
+    torch.testing.assert_close(total_loss, base_loss)
+    total_loss.backward()
+    assert base_loss.grad is not None and base_loss.grad.item() == 1
+    assert logits.grad is None
 
 
 def test_answerability_head_scores_first_pointer_positions_against_no_answer() -> None:
