@@ -13,6 +13,7 @@ from grounded_qa.needle_qa_data import SQUAD2_DATASET, SQUAD2_REVISION, _evidenc
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from scripts.prepare_needle_n2 import SOURCE_LENGTH, sha256
 from scripts.prepare_needle_n3_matched import split_for_context
+from scripts.convert_qa2d import claim_key
 from scripts.prepare_needle_n3_verifier import normalized, tensorize, verifier_claim, verifier_query
 
 
@@ -84,8 +85,9 @@ def write_reader_inputs(tokenizer_path: Path, output_dir: Path) -> None:
     (output_dir / "n3-reader-candidates-input-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
-def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path], output_dir: Path, *, claim: bool = False) -> None:
+def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path], output_dir: Path, *, claim: bool = False, claim_file: Path | None = None) -> None:
     tokenizer = NeedleTokenizer(tokenizer_path, append_markers=False)
+    claims = None if claim_file is None else {claim_key(row["question"], row["candidate"]): row["claim"] for row in map(json.loads, claim_file.read_text().splitlines())}
     rows: dict[str, list[tuple[list[int], int, bool, int, int, int]]] = {"train": [], "validation": []}
     stats = defaultdict(int)
     for report_path in report_paths:
@@ -99,7 +101,7 @@ def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path]
             if start < 0:
                 stats["nonliteral_candidate"] += 1
                 continue
-            query = verifier_claim(row["question"], candidate) if claim else verifier_query(row["question"], candidate)
+            query = claims[claim_key(row["question"], candidate)] if claims is not None else verifier_claim(row["question"], candidate) if claim else verifier_query(row["question"], candidate)
             window = _evidence_window(
                 tokenizer,
                 query,
@@ -128,6 +130,7 @@ def materialize_reader_candidates(tokenizer_path: Path, report_paths: list[Path]
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "purpose": "Verifier data from literal candidates produced by the deployed reader; nonliteral candidates are refused at inference.",
+        "claim_file": None if claim_file is None else str(claim_file),
         "reader_reports": [{"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path in report_paths],
         "stats": dict(stats),
         "splits": {},
@@ -162,11 +165,12 @@ def main() -> None:
         if command == "materialize":
             subparser.add_argument("--reader-report", type=Path, action="append", required=True)
             subparser.add_argument("--claim", action="store_true", help="Render question/candidate as a declarative NLI claim.")
+            subparser.add_argument("--claim-file", type=Path, help="Use precomputed QA2D declarative claims.")
     args = parser.parse_args()
     if args.command == "emit-inputs":
         write_reader_inputs(args.tokenizer, args.output_dir)
     else:
-        materialize_reader_candidates(args.tokenizer, args.reader_report, args.output_dir, claim=args.claim)
+        materialize_reader_candidates(args.tokenizer, args.reader_report, args.output_dir, claim=args.claim, claim_file=args.claim_file)
 
 
 if __name__ == "__main__":
