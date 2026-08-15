@@ -274,3 +274,35 @@ quality win. W&B runs: N2-GEN `pc1x9sjl`; N2-PG `xk8up6zo`.
 
 Exact checkpoint hashes and frozen-evaluation numbers are stored in
 `artifacts/needle_n2_summary_2026-08-14.json`.
+
+### N3 refusal curriculum pilots
+
+The first direct N3 run mixed answerable N2 rows with official SQuAD2
+unanswerables immediately. It produced a real answerability signal but failed
+the product gate: its frozen-context evaluation still answered 52.15% of
+unsupported rows at its calibrated threshold. Rather than train it longer, the
+follow-up controlled the negative curriculum while preserving the N2-PG
+architecture and pointer loss.
+
+| Pilot | Negative mix | Safe-validation answer coverage | Safe false-answer rate | Frozen result |
+|---|---|---:|---:|---|
+| B1, 500 steps | 30% cross-pair | **98.82%** | 1.99% | 48.05% correct EM, 97.66% refusal recall, 0.76% false refusal |
+| B2, 500 steps | official SQuAD2 after B1 | 58.94% | 1.97% | 96.21% false refusal |
+| B3, 500 steps | 15% cross-pair + 15% official replay | 59.22% | 1.92% | 93.94% false refusal |
+
+Here “safe” selects the highest-coverage validation threshold with false-answer
+rate at most 2%, rather than the threshold that maximizes macro F1. B1 is a
+clear success for **cross-document mismatch**: on the frozen context-swaps it
+kept useful answer coverage while refusing wrong and empty contexts. It also
+copied with 86.57% strict pointer-position accuracy. It did not solve neutral
+unsupported questions: the handwritten observatory-password probe was answered
+as `hilltop` with answerability probability 0.9648.
+
+B2 then showed that direct adversarial SQuAD2 fine-tuning overwrites this
+behavior. B3 replay stopped the complete collapse but still required refusing
+nearly all valid frozen answers to satisfy the 2% false-answer bound. This is
+evidence against extending the same mixtures, not an architecture failure.
+The next measured intervention is an **entity-binding negative stage** between
+cross-pair and official SQuAD2 negatives. Exact manifests, run IDs, metrics,
+and the decision are stored in
+`artifacts/needle_n3_curriculum_pilots_2026-08-15.json`.

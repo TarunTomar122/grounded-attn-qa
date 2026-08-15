@@ -1,0 +1,47 @@
+{
+  "base_checkpoint": "n2-pg-onepass-first2-eos2/step-007888.pt",
+  "purpose": "Separate easy context mismatch learning from adversarial unanswerability without changing the attention-only reader.",
+  "pilots": {
+    "b1_cross_pair_500": {
+      "wandb_run": "mbc0c1rb",
+      "data": "70% N2 answerable, 30% deterministic cross-pair negatives",
+      "validation_grounded_threshold": 0.725,
+      "validation_grounded_answer_coverage": 0.9882413463658412,
+      "validation_grounded_false_answer_rate": 0.019890260631001373,
+      "validation_pointer_position_accuracy": 0.8657489712836145,
+      "frozen_context": {
+        "correct_em": 0.48046875,
+        "wrong_or_empty_refusal_recall": 0.9765625,
+        "false_refusal_rate": 0.007575757575757576,
+        "hallucinated_answer_rate": 0.0234375
+      },
+      "handwritten": "3/5 answerable probes exact; neutral unsupported password was answered as 'hilltop' with p_answerable=0.96484375."
+    },
+    "b2_official_only_500": {
+      "wandb_run": "gl5n3x42",
+      "data": "81% N2 answerable, 19% official SQuAD2 unanswerable; starts from B1",
+      "validation_grounded_threshold": 0.84,
+      "validation_grounded_answer_coverage": 0.5894025134122143,
+      "validation_grounded_false_answer_rate": 0.01968040370058873,
+      "frozen_context": {
+        "false_refusal_rate": 0.9621212121212122,
+        "hallucinated_answer_rate": 0.0
+      },
+      "finding": "Sequential adversarial fine-tuning catastrophically forgot B1's useful answer/refusal separation."
+    },
+    "b3_mixed_replay_500": {
+      "wandb_run": "kqbi9vj7",
+      "data": "70% N2 answerable, 15% cross-pair, 15% official SQuAD2 unanswerable; starts from B1",
+      "validation_grounded_threshold": 0.855,
+      "validation_grounded_answer_coverage": 0.592195193650327,
+      "validation_grounded_false_answer_rate": 0.019204389574759947,
+      "validation_pointer_position_accuracy": 0.8564915923715734,
+      "frozen_context": {
+        "false_refusal_rate": 0.9393939393939394,
+        "hallucinated_answer_rate": 0.0
+      },
+      "finding": "Replay prevents total collapse but does not recover useful strict-threshold coverage on adversarial negatives."
+    }
+  },
+  "decision": "Stop this distribution family at 500 steps. Next add and evaluate an explicit entity-binding negative stage between cross-pair and official SQuAD2 negatives; do not extend B2 or B3 unchanged."
+}
