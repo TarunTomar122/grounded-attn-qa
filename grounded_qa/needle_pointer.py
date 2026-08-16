@@ -215,6 +215,36 @@ def evidence_start_loss(output: NeedlePointerOutput, gold_copy_positions: torch.
     return F.cross_entropy(output.evidence_position_logits.float(), evidence_start_targets(gold_copy_positions, answerable))
 
 
+def _log_probability_with_finite_floor(probability: torch.Tensor) -> torch.Tensor:
+    """Keep an impossible copy-only branch finite without touching positive values."""
+    log_probability = torch.full_like(probability, torch.finfo(probability.dtype).min)
+    positive = probability.gt(0)
+    log_probability[positive] = probability[positive].log()
+    return log_probability
+
+
+def _log_mixture_probability(
+    generator_log_probability: torch.Tensor,
+    copy_probability: torch.Tensor,
+    p_gen: torch.Tensor,
+) -> torch.Tensor:
+    """Combine generator and copy probabilities without invalid boundary logs."""
+    copy_log_probability = _log_probability_with_finite_floor(copy_probability)
+    log_probability = torch.empty_like(generator_log_probability)
+    generator_only = p_gen.eq(1)
+    copy_only = p_gen.eq(0)
+    interior = ~(generator_only | copy_only)
+
+    log_probability[generator_only] = generator_log_probability[generator_only]
+    log_probability[copy_only] = copy_log_probability[copy_only]
+    interior_p_gen = p_gen[interior]
+    log_probability[interior] = torch.logaddexp(
+        interior_p_gen.log() + generator_log_probability[interior],
+        torch.log1p(-interior_p_gen) + copy_log_probability[interior],
+    )
+    return log_probability
+
+
 def negative_eos_loss(
     output: NeedlePointerOutput,
     source_ids: torch.Tensor,
@@ -231,9 +261,10 @@ def negative_eos_loss(
         output.copy_position_probs.float()[:, 0] * source_ids.eq(eos_id)
     ).sum(dim=-1)
     p_gen = output.p_gen.float()[:, 0]
-    log_probability = torch.logaddexp(
-        p_gen.log() + vocab_log_probability,
-        torch.log1p(-p_gen) + copy_probability.log(),
+    log_probability = _log_mixture_probability(
+        vocab_log_probability,
+        copy_probability,
+        p_gen,
     )
     return -log_probability[negative].mean()
 

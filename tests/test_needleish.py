@@ -307,7 +307,30 @@ def test_negative_eos_loss_keeps_gradient_for_bfloat16_vocab_underflow() -> None
     assert torch.isfinite(loss)
     loss.backward()
     assert vocab_logits.grad is not None
+    assert torch.isfinite(vocab_logits.grad).all()
     assert vocab_logits.grad[..., eos_id].abs() > 0
+
+
+@pytest.mark.parametrize("p_gen", [0.0, 1.0])
+def test_negative_eos_loss_handles_zero_copy_and_p_gen_boundaries(p_gen: float) -> None:
+    eos_id = tiny_config().eos_id
+    vocab_logits = torch.full((1, 1, tiny_config().vocab_size), -100.0)
+    vocab_logits[..., eos_id] = -1000.0
+    vocab_logits.requires_grad_()
+    output = NeedlePointerOutput(
+        vocab_logits=vocab_logits,
+        copy_position_probs=torch.zeros((1, 1, 2)),
+        p_gen=torch.tensor([[p_gen]], requires_grad=True),
+    )
+
+    loss = negative_eos_loss(output, torch.tensor([[4, 5]]), torch.tensor([False]), eos_id=eos_id)
+
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert output.p_gen.grad is not None
+    assert torch.isfinite(output.p_gen.grad).all()
+    assert vocab_logits.grad is not None
+    assert torch.isfinite(vocab_logits.grad).all()
 
 
 def test_negative_eos_loss_ignores_answerable_rows() -> None:
