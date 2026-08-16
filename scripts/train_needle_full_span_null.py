@@ -24,7 +24,8 @@ def model_and_optimizer(args: argparse.Namespace, device: torch.device) -> tuple
             {"params": model.backbone.parameters(), "lr": args.backbone_lr},
             {
                 "params": [
-                    *model.pointer.parameters(),
+                    *model.start_pointer.parameters(),
+                    *model.end_pointer.parameters(),
                     model.null_start_key,
                     model.null_end_key,
                     model.null_start_bias,

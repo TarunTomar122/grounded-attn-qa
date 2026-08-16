@@ -31,8 +31,10 @@ class NeedleFullSpanNullModel(nn.Module):
         super().__init__()
         self.cfg = cfg or NeedleConfig.public_checkpoint()
         self.backbone = NeedleishModel(self.cfg)
-        self.pointer = PointerGenerator(self.cfg.d_model)
-        self.pointer.apply(NeedleishModel._init)
+        self.start_pointer = PointerGenerator(self.cfg.d_model)
+        self.end_pointer = PointerGenerator(self.cfg.d_model)
+        self.start_pointer.apply(NeedleishModel._init)
+        self.end_pointer.apply(NeedleishModel._init)
         self.null_start_key = nn.Parameter(torch.empty(self.cfg.d_model))
         self.null_end_key = nn.Parameter(torch.empty(self.cfg.d_model))
         self.null_start_bias = nn.Parameter(torch.zeros(()))
@@ -61,17 +63,22 @@ class NeedleFullSpanNullModel(nn.Module):
             target_valid,
         )
 
-        query = self.pointer.pointer_q(decoder_hidden)
-        key = self.pointer.pointer_k(memory)
-        source_logits = torch.einsum("btd,bsd->bts", query, key) / math.sqrt(self.cfg.d_model)
         valid_context = source_valid & context_mask
-        source_logits = source_logits.masked_fill(~valid_context[:, None, :], float("-inf"))
+        start_query = self.start_pointer.pointer_q(decoder_hidden[:, 0:1])
+        start_key = self.start_pointer.pointer_k(memory)
+        start_logits = torch.einsum("btd,bsd->bts", start_query, start_key) / math.sqrt(self.cfg.d_model)
+        start_logits = start_logits.masked_fill(~valid_context[:, None, :], float("-inf"))
+
+        end_query = self.end_pointer.pointer_q(decoder_hidden[:, 1:2])
+        end_key = self.end_pointer.pointer_k(memory)
+        end_logits = torch.einsum("btd,bsd->bts", end_query, end_key) / math.sqrt(self.cfg.d_model)
+        end_logits = end_logits.masked_fill(~valid_context[:, None, :], float("-inf"))
 
         null_start = self.null_start_bias + decoder_hidden[:, 0] @ self.null_start_key / math.sqrt(self.cfg.d_model)
         null_end = self.null_end_bias + decoder_hidden[:, 1] @ self.null_end_key / math.sqrt(self.cfg.d_model)
         return FullSpanNullOutput(
-            start_logits=torch.cat((null_start[:, None], source_logits[:, 0]), dim=1),
-            end_logits=torch.cat((null_end[:, None], source_logits[:, 1]), dim=1),
+            start_logits=torch.cat((null_start[:, None], start_logits[:, 0]), dim=1),
+            end_logits=torch.cat((null_end[:, None], end_logits[:, 0]), dim=1),
             memory=memory,
             decoder_hidden=decoder_hidden,
         )

@@ -48,6 +48,7 @@ def test_full_span_null_loss_reaches_decoder_cross_attention() -> None:
 
     assert torch.isfinite(loss)
     assert model.backbone.decoder[0].encoder_attn.q_proj.weight.grad is not None
-    assert model.pointer.pointer_q.weight.grad is not None
+    assert model.start_pointer.pointer_q.weight.grad is not None
+    assert model.end_pointer.pointer_q.weight.grad is not None
     start, end, _, _ = best_spans(output)
     assert start.shape == end.shape == (1,)
