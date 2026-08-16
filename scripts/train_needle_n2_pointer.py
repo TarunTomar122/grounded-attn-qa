@@ -134,6 +134,21 @@ def negative_eos_term(
     return weight * negative_eos_loss(output, source_ids, answerable, eos_id=eos_id)
 
 
+def effective_negative_eos_weight(
+    update_step: int,
+    *,
+    before: float,
+    after: float | None = None,
+    switch_step: int | None = None,
+) -> float:
+    """Select the negative-EOS weight for a one-based training update."""
+    if after is None:
+        return before
+    if switch_step is None:
+        raise ValueError("switch_step is required when after is set")
+    return after if update_step >= switch_step else before
+
+
 @torch.inference_mode()
 def evaluate(model, data, device, args) -> dict[str, float]:
     model.eval()
@@ -359,6 +374,8 @@ def main() -> None:
     parser.add_argument("--answerability-weight", type=float, default=0.0)
     parser.add_argument("--answerability-bce-weight", type=float, default=0.0)
     parser.add_argument("--negative-eos-weight", type=float, default=0.0)
+    parser.add_argument("--negative-eos-weight-after", type=float)
+    parser.add_argument("--negative-eos-switch-step", type=int)
     parser.add_argument("--answerability-pos-weight", type=float)
     parser.add_argument("--answerability", action="store_true")
     args = parser.parse_args()
@@ -368,6 +385,12 @@ def main() -> None:
         parser.error("--answerability-bce-weight requires --answerability")
     if args.negative_eos_weight and not args.answerability:
         parser.error("--negative-eos-weight requires --answerability")
+    if args.negative_eos_weight_after is not None and args.negative_eos_switch_step is None:
+        parser.error("--negative-eos-weight-after requires --negative-eos-switch-step")
+    if args.negative_eos_switch_step is not None and args.negative_eos_weight_after is None:
+        parser.error("--negative-eos-switch-step requires --negative-eos-weight-after")
+    if args.negative_eos_weight_after is not None and not args.answerability:
+        parser.error("--negative-eos-weight-after requires --answerability")
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -449,16 +472,22 @@ def main() -> None:
             pos_weight=answerability_pos_weight,
             weight=args.answerability_bce_weight,
         )
+        negative_eos_weight = effective_negative_eos_weight(
+            step + 1,
+            before=args.negative_eos_weight,
+            after=args.negative_eos_weight_after,
+            switch_step=args.negative_eos_switch_step,
+        )
         negative_eos_weighted = negative_eos_term(
             output,
             source,
             answerable,
-            weight=args.negative_eos_weight,
+            weight=negative_eos_weight,
             eos_id=EOS_ID,
         )
         negative_eos = (
-            negative_eos_weighted / args.negative_eos_weight
-            if args.negative_eos_weight
+            negative_eos_weighted / negative_eos_weight
+            if negative_eos_weight
             else output.vocab_logits.float().sum() * 0
         )
         total_loss = loss.total + args.answerability_weight * evidence_loss + answerability_bce + negative_eos_weighted
@@ -481,6 +510,7 @@ def main() -> None:
                 "train/evidence_choice_accuracy": float(output.evidence_position_logits.argmax(dim=-1).eq(evidence_target).float().mean()) if evidence_target is not None else 0.0,
                 "train/answerability_bce": float(F.binary_cross_entropy_with_logits(output.answerability_logits, answerable.float()).detach()) if output.answerability_logits is not None else 0.0,
                 "train/answerability_bce_term": float(answerability_bce.detach()),
+                "train/negative_eos_weight": negative_eos_weight,
                 "train/negative_eos_loss": float(negative_eos.detach()),
                 "train/negative_eos_term": float(negative_eos_weighted.detach()),
                 "train/answerability_accuracy": float((output.answerability_logits.ge(0) == answerable).float().mean()) if output.answerability_logits is not None else 0.0,

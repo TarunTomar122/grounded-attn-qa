@@ -11,7 +11,7 @@ from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, Needleish
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
 from grounded_qa.synth_data import encode_synth_row, source_bucket, split_for_source
 from scripts.evaluate_public_needle import apply_refusal, generate_batch, summarize
-from scripts.train_needle_n2_pointer import answerability_bce_term, calibrate_answerability, negative_eos_term, swap_contexts
+from scripts.train_needle_n2_pointer import answerability_bce_term, calibrate_answerability, effective_negative_eos_weight, negative_eos_term, swap_contexts
 
 
 def tiny_config() -> NeedleConfig:
@@ -358,6 +358,17 @@ def test_negative_eos_zero_weight_preserves_base_loss() -> None:
     term = negative_eos_term(output, source, torch.tensor([False]), weight=0.0)
 
     torch.testing.assert_close(base_loss + term, base_loss)
+
+
+def test_effective_negative_eos_weight_preserves_existing_default() -> None:
+    assert effective_negative_eos_weight(1, before=1.0) == 1.0
+    assert effective_negative_eos_weight(750, before=1.0) == 1.0
+
+
+def test_effective_negative_eos_weight_switches_at_boundary() -> None:
+    assert effective_negative_eos_weight(749, before=1.0, after=8.0, switch_step=750) == 1.0
+    assert effective_negative_eos_weight(750, before=1.0, after=8.0, switch_step=750) == 8.0
+    assert effective_negative_eos_weight(1500, before=1.0, after=8.0, switch_step=750) == 8.0
 
 
 def test_answerability_head_scores_first_pointer_positions_against_conditioned_null() -> None:
