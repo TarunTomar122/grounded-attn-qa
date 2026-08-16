@@ -362,7 +362,7 @@ def test_negative_eos_zero_weight_preserves_base_loss() -> None:
 
 
 def test_negative_sentinel_pointer_zero_weight_returns_zero() -> None:
-    logits = torch.tensor([[[0.25, 0.75]]])
+    logits = torch.tensor([[[float("-inf"), float("-inf")]]])
     term = negative_sentinel_pointer_term(
         logits,
         torch.tensor([[-1]]),
@@ -371,6 +371,7 @@ def test_negative_sentinel_pointer_zero_weight_returns_zero() -> None:
     )
 
     torch.testing.assert_close(term, torch.zeros((), dtype=torch.float32))
+    assert torch.isfinite(term)
 
 
 def test_negative_sentinel_pointer_uses_first_pointer_logits() -> None:
@@ -394,13 +395,14 @@ def test_negative_sentinel_pointer_uses_first_pointer_logits() -> None:
 
 def test_negative_sentinel_pointer_no_negatives_returns_zero() -> None:
     term = negative_sentinel_pointer_term(
-        torch.tensor([[[0.25, 0.75]]]),
+        torch.tensor([[[float("-inf"), float("-inf")]]]),
         torch.tensor([[-1]]),
         torch.tensor([True]),
         weight=1.0,
     )
 
     torch.testing.assert_close(term, torch.zeros((), dtype=torch.float32))
+    assert torch.isfinite(term)
 
 
 def test_negative_sentinel_pointer_uses_only_negative_rows() -> None:

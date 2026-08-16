@@ -172,11 +172,12 @@ def negative_sentinel_pointer_term(
     weight: float,
 ) -> torch.Tensor:
     """Upweight the first-token sentinel pointer loss on negative rows."""
+    zero = gold_copy_positions.new_zeros((), dtype=torch.float32)
     if weight == 0.0:
-        return copy_position_logits.float().sum() * 0
+        return zero
     negative = ~answerable
     if not negative.any():
-        return copy_position_logits.float().sum() * 0
+        return zero
     gold_start = gold_copy_positions[negative, 0]
     if gold_start.lt(0).any():
         raise ValueError("negative sentinel pointer targets must be nonnegative")
