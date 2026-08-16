@@ -102,7 +102,7 @@ def collect(model, rows, metadata, tokenizer, device, batch_size, precision):
             examples.append({"kind": label, "question": metadata[index]["question"], "context": metadata[index]["context"], "gold": metadata[index]["answers"]["text"], "prediction": final_predictions[index], "raw_prediction": raw_predictions[index], "null_margin": margins[index]})
     return {
         "argmax": {"has_answer_start_accuracy": start_correct / max(has_rows, 1), "has_answer_end_accuracy": end_correct / max(has_rows, 1), "null_start_accuracy": null_start / max(no_rows, 1), "null_end_accuracy": null_end / max(no_rows, 1)},
-        "raw_best_span": summarize(metadata, raw_predictions, [float("inf")] * len(margins), float("inf")),
+        "raw_best_span": summarize(metadata, raw_predictions, [0.0] * len(margins), float("inf")),
         "best_threshold": best,
         "threshold_sweep_top": sorted(sweep, key=lambda item: item["all_f1"], reverse=True)[:10],
         "margin_distribution": {
