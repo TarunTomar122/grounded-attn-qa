@@ -38,6 +38,36 @@ def batch(data: dict[str, torch.Tensor], indices: torch.Tensor, device: torch.de
     return source, source_valid, context_mask, decoder, target, target_valid, gold, answerable
 
 
+def add_copy_eos_sentinel(data: dict[str, torch.Tensor], *, eos_id: int = EOS_ID) -> dict[str, torch.Tensor]:
+    """Append one supervised EOS source position to every row."""
+    source_ids = data["source_ids"]
+    source_lengths = data["source_lengths"].to(dtype=torch.long)
+    source_width = source_ids.shape[1]
+    if ((source_lengths < 0) | (source_lengths >= source_width)).any():
+        raise ValueError("copy EOS sentinel requires one spare padded source slot per row")
+
+    sentinel_positions = source_lengths
+    rows = torch.arange(len(source_ids), device=source_ids.device)
+    updated_source = source_ids.clone()
+    updated_source[rows, sentinel_positions] = eos_id
+    updated_lengths = data["source_lengths"].clone() + 1
+    updated_gold = data["gold_copy_positions"].clone()
+    target_positions = torch.arange(data["target_ids"].shape[1], device=source_ids.device)[None]
+    target_valid = target_positions < data["target_lengths"].to(dtype=torch.long)[:, None]
+    eos_targets = target_valid & data["target_ids"].eq(eos_id)
+    updated_gold[eos_targets] = sentinel_positions[:, None].to(updated_gold.dtype).expand_as(updated_gold)[eos_targets]
+
+    result = dict(data)
+    result["source_ids"] = updated_source
+    result["source_lengths"] = updated_lengths
+    result["gold_copy_positions"] = updated_gold
+    if "context_mask" in data:
+        context_mask = data["context_mask"].clone()
+        context_mask[rows, sentinel_positions] = True
+        result["context_mask"] = context_mask
+    return result
+
+
 def swap_contexts(
     source: torch.Tensor,
     source_valid: torch.Tensor,
@@ -154,7 +184,7 @@ def evaluate(model, data, device, args) -> dict[str, float]:
     model.eval()
     all_probabilities: list[torch.Tensor] = []
     all_answerable: list[torch.Tensor] = []
-    totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "gold_pointer_probability", "p_gen", "wrong_sequence", "wrong_weighted", "answerability_bce", "evidence_start", "evidence_correct", "evidence_positive_rows", "evidence_positive_correct", "evidence_negative_rows", "evidence_negative_correct", "negative_eos", "negative_eos_correct", "negative_eos_rows", "tp", "tn", "fp", "fn", "positive_probability", "negative_probability", "wrong_probability", "wrong_rows")}
+    totals = {key: 0.0 for key in ("rows", "tokens", "weighted", "copy_tokens", "sequence", "z", "pointer", "pointer_correct", "gold_pointer_probability", "p_gen", "wrong_sequence", "wrong_weighted", "answerability_bce", "evidence_start", "evidence_correct", "evidence_positive_rows", "evidence_positive_correct", "evidence_negative_rows", "evidence_negative_correct", "negative_eos", "negative_eos_correct", "negative_eos_rows", "negative_sentinel_rows", "negative_sentinel_correct", "positive_answer_tokens", "positive_answer_correct", "tp", "tn", "fp", "fn", "positive_probability", "negative_probability", "wrong_probability", "wrong_rows")}
     for start in range(0, len(data["source_ids"]), args.batch_size):
         indices = torch.arange(start, min(start + args.batch_size, len(data["source_ids"])))
         source, source_valid, context_mask, decoder, target, valid, gold, answerable = batch(data, indices, device)
@@ -190,6 +220,13 @@ def evaluate(model, data, device, args) -> dict[str, float]:
         totals["pointer_correct"] += float(loss.pointer_accuracy) * copy_tokens
         totals["gold_pointer_probability"] += float(loss.mean_gold_pointer_probability) * copy_tokens
         totals["p_gen"] += float(loss.mean_p_gen) * tokens
+        copy_prediction = output.copy_position_probs.argmax(dim=-1)
+        negative_rows = ~answerable
+        positive_answer_tokens = answerable[:, None] & valid & target.ne(EOS_ID)
+        totals["negative_sentinel_rows"] += int(negative_rows.sum())
+        totals["negative_sentinel_correct"] += int(copy_prediction[negative_rows, 0].eq(gold[negative_rows, 0]).sum())
+        totals["positive_answer_tokens"] += int(positive_answer_tokens.sum())
+        totals["positive_answer_correct"] += int((copy_prediction.eq(gold) & positive_answer_tokens).sum())
         if wrong_loss is not None:
             totals["wrong_sequence"] += float(wrong_loss.sequence) * weighted
             totals["wrong_weighted"] += weighted
@@ -237,6 +274,8 @@ def evaluate(model, data, device, args) -> dict[str, float]:
         "val/mean_p_gen": totals["p_gen"] / max(totals["tokens"], 1),
         "val/wrong_context_sequence_nll": wrong,
         "val/context_dependency_gap": wrong - sequence,
+        "val/negative_sentinel_pointer_accuracy": totals["negative_sentinel_correct"] / max(totals["negative_sentinel_rows"], 1),
+        "val/positive_answer_pointer_accuracy": totals["positive_answer_correct"] / max(totals["positive_answer_tokens"], 1),
     }
     if args.answerability:
         positives = totals["tp"] + totals["fn"]
@@ -378,6 +417,7 @@ def main() -> None:
     parser.add_argument("--negative-eos-switch-step", type=int)
     parser.add_argument("--answerability-pos-weight", type=float)
     parser.add_argument("--answerability", action="store_true")
+    parser.add_argument("--copy-eos-sentinel", action="store_true")
     args = parser.parse_args()
     if args.answerability_weight and not args.answerability:
         parser.error("--answerability-weight requires --answerability")
@@ -398,6 +438,9 @@ def main() -> None:
     torch.set_float32_matmul_precision("high")
     device = torch.device("cuda")
     train, validation = load_split(args.data_dir, "train"), load_split(args.data_dir, "validation")
+    if args.copy_eos_sentinel:
+        train = add_copy_eos_sentinel(train)
+        validation = add_copy_eos_sentinel(validation)
     if args.answerability and (train["answerable"] & train["gold_copy_positions"][:, 0].lt(0)).any():
         parser.error("--answerability requires every answerable training row to have a gold source start; filter paraphrastic rows first")
     answerability_pos_weight = None
