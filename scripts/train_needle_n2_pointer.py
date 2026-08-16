@@ -164,6 +164,26 @@ def negative_eos_term(
     return weight * negative_eos_loss(output, source_ids, answerable, eos_id=eos_id)
 
 
+def negative_sentinel_pointer_term(
+    copy_position_logits: torch.Tensor,
+    gold_copy_positions: torch.Tensor,
+    answerable: torch.Tensor,
+    *,
+    weight: float,
+) -> torch.Tensor:
+    """Upweight the first-token sentinel pointer loss on negative rows."""
+    if weight == 0.0:
+        return copy_position_logits.float().sum() * 0
+    negative = ~answerable
+    if not negative.any():
+        return copy_position_logits.float().sum() * 0
+    gold_start = gold_copy_positions[negative, 0]
+    if gold_start.lt(0).any():
+        raise ValueError("negative sentinel pointer targets must be nonnegative")
+    loss = F.cross_entropy(copy_position_logits[negative, 0].float(), gold_start)
+    return weight * loss
+
+
 def effective_negative_eos_weight(
     update_step: int,
     *,
@@ -415,6 +435,7 @@ def main() -> None:
     parser.add_argument("--negative-eos-weight", type=float, default=0.0)
     parser.add_argument("--negative-eos-weight-after", type=float)
     parser.add_argument("--negative-eos-switch-step", type=int)
+    parser.add_argument("--negative-sentinel-pointer-weight", type=float, default=0.0)
     parser.add_argument("--answerability-pos-weight", type=float)
     parser.add_argument("--answerability", action="store_true")
     parser.add_argument("--copy-eos-sentinel", action="store_true")
@@ -425,6 +446,8 @@ def main() -> None:
         parser.error("--answerability-bce-weight requires --answerability")
     if args.negative_eos_weight and not args.answerability:
         parser.error("--negative-eos-weight requires --answerability")
+    if args.negative_sentinel_pointer_weight and not args.copy_eos_sentinel:
+        parser.error("--negative-sentinel-pointer-weight requires --copy-eos-sentinel")
     if args.negative_eos_weight_after is not None and args.negative_eos_switch_step is None:
         parser.error("--negative-eos-weight-after requires --negative-eos-switch-step")
     if args.negative_eos_switch_step is not None and args.negative_eos_weight_after is None:
@@ -533,7 +556,18 @@ def main() -> None:
             if negative_eos_weight
             else output.vocab_logits.float().sum() * 0
         )
-        total_loss = loss.total + args.answerability_weight * evidence_loss + answerability_bce + negative_eos_weighted
+        negative_sentinel_pointer_weighted = negative_sentinel_pointer_term(
+            output.copy_position_logits,
+            gold,
+            answerable,
+            weight=args.negative_sentinel_pointer_weight,
+        )
+        negative_sentinel_pointer_loss = (
+            negative_sentinel_pointer_weighted / args.negative_sentinel_pointer_weight
+            if args.negative_sentinel_pointer_weight
+            else output.vocab_logits.float().sum() * 0
+        )
+        total_loss = loss.total + args.answerability_weight * evidence_loss + answerability_bce + negative_eos_weighted + negative_sentinel_pointer_weighted
         total_loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         for optimizer in optimizers.values():
@@ -556,6 +590,8 @@ def main() -> None:
                 "train/negative_eos_weight": negative_eos_weight,
                 "train/negative_eos_loss": float(negative_eos.detach()),
                 "train/negative_eos_term": float(negative_eos_weighted.detach()),
+                "train/negative_sentinel_pointer_loss": float(negative_sentinel_pointer_loss.detach()),
+                "train/negative_sentinel_pointer_term": float(negative_sentinel_pointer_weighted.detach()),
                 "train/answerability_accuracy": float((output.answerability_logits.ge(0) == answerable).float().mean()) if output.answerability_logits is not None else 0.0,
                 "train/grad_norm": float(grad_norm),
                 "train/adam_lr": adam_lr,

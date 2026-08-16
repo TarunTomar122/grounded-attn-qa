@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 import torch
+import torch.nn.functional as F
 import pytest
 
 from grounded_qa.needle_pointer import NeedleAnswerablePointerModel, NeedlePointerModel, NeedlePointerOutput, evidence_start_loss, evidence_start_targets, negative_eos_loss, pointer_loss
@@ -11,7 +12,7 @@ from grounded_qa.needleish import GroupedQueryAttention, NeedleConfig, Needleish
 from grounded_qa.synth_rag import appears_unsupported, cited_source_ids, clean_answer, evidence_context, parse_sources
 from grounded_qa.synth_data import encode_synth_row, source_bucket, split_for_source
 from scripts.evaluate_public_needle import apply_refusal, generate_batch, summarize
-from scripts.train_needle_n2_pointer import answerability_bce_term, calibrate_answerability, effective_negative_eos_weight, negative_eos_term, swap_contexts
+from scripts.train_needle_n2_pointer import answerability_bce_term, calibrate_answerability, effective_negative_eos_weight, negative_eos_term, negative_sentinel_pointer_term, swap_contexts
 
 
 def tiny_config() -> NeedleConfig:
@@ -358,6 +359,73 @@ def test_negative_eos_zero_weight_preserves_base_loss() -> None:
     term = negative_eos_term(output, source, torch.tensor([False]), weight=0.0)
 
     torch.testing.assert_close(base_loss + term, base_loss)
+
+
+def test_negative_sentinel_pointer_zero_weight_returns_zero() -> None:
+    logits = torch.tensor([[[0.25, 0.75]]])
+    term = negative_sentinel_pointer_term(
+        logits,
+        torch.tensor([[-1]]),
+        torch.tensor([False]),
+        weight=0.0,
+    )
+
+    torch.testing.assert_close(term, torch.zeros((), dtype=torch.float32))
+
+
+def test_negative_sentinel_pointer_uses_first_pointer_logits() -> None:
+    logits = torch.tensor(
+        [[[0.25, 0.75]], [[0.6, 0.4]]],
+        requires_grad=True,
+    )
+    term = negative_sentinel_pointer_term(
+        logits,
+        torch.tensor([[1], [0]]),
+        torch.tensor([False, False]),
+        weight=2.0,
+    )
+
+    expected = 2 * F.cross_entropy(logits.detach()[:, 0], torch.tensor([1, 0]))
+    torch.testing.assert_close(term, expected)
+    term.backward()
+    assert logits.grad is not None
+    assert logits.grad.abs().sum() > 0
+
+
+def test_negative_sentinel_pointer_no_negatives_returns_zero() -> None:
+    term = negative_sentinel_pointer_term(
+        torch.tensor([[[0.25, 0.75]]]),
+        torch.tensor([[-1]]),
+        torch.tensor([True]),
+        weight=1.0,
+    )
+
+    torch.testing.assert_close(term, torch.zeros((), dtype=torch.float32))
+
+
+def test_negative_sentinel_pointer_uses_only_negative_rows() -> None:
+    logits = torch.tensor(
+        [[[0.2, 0.8]], [[0.25, 0.75]]],
+        requires_grad=True,
+    )
+    term = negative_sentinel_pointer_term(
+        logits,
+        torch.tensor([[-1], [1]]),
+        torch.tensor([True, False]),
+        weight=3.0,
+    )
+
+    torch.testing.assert_close(term, 3 * F.cross_entropy(logits.detach()[1:, 0], torch.tensor([1])))
+
+
+def test_negative_sentinel_pointer_rejects_negative_targets() -> None:
+    with pytest.raises(ValueError, match="nonnegative"):
+        negative_sentinel_pointer_term(
+            torch.tensor([[[0.25, 0.75]]]),
+            torch.tensor([[-1]]),
+            torch.tensor([False]),
+            weight=1.0,
+        )
 
 
 def test_effective_negative_eos_weight_preserves_existing_default() -> None:
