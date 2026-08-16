@@ -50,14 +50,35 @@ def select_rows(
     return {key: value.index_select(0, indices) for key, value in data.items()}
 
 
+def select_balanced_rows(
+    data: dict[str, torch.Tensor],
+    count: int,
+    seed: int,
+) -> dict[str, torch.Tensor]:
+    """Select count answerable and count unanswerable rows in fixed order."""
+    answerable = select_rows(data, count, True, seed)
+    unanswerable = select_rows(data, count, False, seed + 1)
+    return {key: torch.cat((answerable[key], unanswerable[key])) for key in data}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--count", type=int, required=True)
-    parser.add_argument("--answerable", type=parse_bool, required=True, metavar="true|false")
+    parser.add_argument("--answerable", type=parse_bool, metavar="true|false")
+    parser.add_argument(
+        "--balanced",
+        action="store_true",
+        help="select --count answerable and --count unanswerable rows",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+
+    if args.balanced and args.answerable is not None:
+        parser.error("--balanced cannot be combined with --answerable")
+    if not args.balanced and args.answerable is None:
+        parser.error("--answerable is required unless --balanced is set")
 
     input_dir = args.input_dir.resolve()
     output_dir = args.output_dir.resolve()
@@ -65,10 +86,20 @@ def main() -> None:
         parser.error("--output-dir must differ from --input-dir")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary = {"input_dir": str(input_dir), "output_dir": str(output_dir), "count": args.count, "answerable": args.answerable, "splits": {}}
+    summary = {
+        "input_dir": str(input_dir),
+        "output_dir": str(output_dir),
+        "count": args.count,
+        "answerable": args.answerable,
+        "balanced": args.balanced,
+        "splits": {},
+    }
     for split_index, split in enumerate(("train", "validation")):
         data = load_split(input_dir, split)
-        selected = select_rows(data, args.count, args.answerable, args.seed + split_index)
+        if args.balanced:
+            selected = select_balanced_rows(data, args.count, args.seed + split_index)
+        else:
+            selected = select_rows(data, args.count, args.answerable, args.seed + split_index)
         path = output_dir / f"mechanics-{split}.pt"
         torch.save(selected, path)
         summary["splits"][split] = {"rows": len(selected["source_ids"]), "path": str(path)}
