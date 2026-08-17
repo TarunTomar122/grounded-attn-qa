@@ -4,54 +4,62 @@ Date: 2026-08-17
 
 ## Run
 
-- Base: selected 70/30 checkpoint; full pretrained Needle encoder-decoder
-- Composition: 80% answerable / 20% unanswerable
+- Base: released pretrained Needle checkpoint (`model.safetensors`), full
+  encoder-decoder trainable
+- Resume: selected 70/30 `best.pt`; it tied `step-020000.pt` on the fixed full
+  validation set
+- Composition: 80% answerable / 20% unanswerable; batch size 30
 - Steps: 20,000 → 26,000
-- Batch size: 30
 - Optimizer rates: backbone `1e-5`, heads `1e-4`
 - Precision: bfloat16
-- Validation: unchanged fixed SQuAD2-derived set, 11,635 rows
+- Validation: unchanged SQuAD2-derived set, 11,635 rows
 - Checkpoints: `/workspace/runs/needle-full-decoder-span-null-80-20-v1/`
 - W&B: [needle-full-decoder-span-null-squad2-80-20-v1](https://wandb.ai/tomartarun2001-adobe/grounded-attn-qa/runs/jhiu9tw1)
 
 ## 70/30 checkpoint selection
 
-Both 70/30 checkpoints were evaluated on the same full validation set. They
-tied on the selection metrics, so `best.pt` was used to resume the 80/20 run.
+| Checkpoint | Threshold | Threshold F1 | HasAns F1 |
+|---|---:|---:|---:|
+| `step-020000.pt` | -1.4453125 | 0.5409721580099253 | 0.222884193048415 |
+| `best.pt` | -1.4453125 | 0.5409721580099253 | 0.222884193048415 |
 
-| Checkpoint | Tuned threshold | Threshold F1 | HasAns F1 | NoAns accuracy | False refusal | False answer |
-|---|---:|---:|---:|---:|---:|---:|
-| `step-020000.pt` | -1.4453125 | 0.5409721580099253 | 0.222884193048415 | 0.8454163162321279 | 0.7075571177504394 | 0.15458368376787215 |
-| `best.pt` | -1.4453125 | 0.5409721580099253 | 0.222884193048415 | 0.8454163162321279 | 0.7075571177504394 | 0.15458368376787215 |
+The records tie; the continuation used `/workspace/runs/needle-full-decoder-span-null-70-30-v1/best.pt`.
 
-## Training metrics
+## Final 80/20 metrics
 
-| Step | Full validation loss | Threshold | Threshold F1 | HasAns F1 |
-|---:|---:|---:|---:|---:|
-| 23,000 | 3.955600028799981 | -3.015625 | 0.5415032154530123 | 0.20200174196762652 |
-| 24,000 | 3.8828698304510607 | -3.1328125 | 0.5444628010824777 | 0.19662999834703385 |
-| 25,000 | 3.889168991256006 | -2.923828125 | 0.545641033449852 | 0.2285647494181061 |
-| 26,000 | 3.843365730698576 | -2.65625 | 0.5431098662028279 | 0.23885470883478002 |
+The final full validation at step 26,000 used tuned threshold `-2.65625`:
 
-Final step-26000 train loss was `3.795828342437744` (`start=1.7638863325119019`,
-`end=2.0319418907165527`); gradient norm was `2.548375129699707`.
+- Validation loss: `3.843365730698576`
+- Threshold F1: `0.5431098662028279`
+- Threshold HasAns F1: `0.23885470883478002`
+- Threshold EM: `0.5253115599484315`
+- Threshold HasAns EM: `0.2024604569420035`
+- False-refusal rate: `0.690158172231986`
+- False-answer rate: `0.16568544995794784`
+- NoAns accuracy: `0.8343145500420521`
+- Raw HasAns F1: `0.5838716547258801`
+
+Final quick/training record: quick loss `3.8592029677497015`, quick threshold
+F1 `0.5742515297202797`, quick HasAns F1 `0.15751822645439667`, train loss
+`3.795828342437744`, start loss `1.7638863325119019`, end loss
+`2.0319418907165527`, grad norm `2.548375129699707`.
+
+W&B reported the run synced after the final checkpoint.
 
 ## Manual probes
 
-The exact question/context/prediction JSONs are saved on the persistent volume:
+The existing `scripts/manual_probe_full_span_null.py` ran both checkpoints with
+threshold `-2.65625`. Each JSON contains the exact question, context, expected
+answer, raw span, prediction, NULL margin, and threshold:
 
-- `/workspace/runs/needle-full-decoder-span-null-80-20-v1/manual-final-step-026000.json`
-- `/workspace/runs/needle-full-decoder-span-null-80-20-v1/manual-best.json`
+- `/workspace/runs/needle-full-decoder-span-null-80-20-v1/final-step-026000-probe.json`
+- `/workspace/runs/needle-full-decoder-span-null-80-20-v1/best-probe.json`
 
-Both checkpoints used the final tuned threshold `-2.65625`. Both returned the
-exact access code and opening date, and both abstained on the unsupported
-question. The raw unsupported span was `East Annex`; thresholding correctly
-returned an empty prediction.
+| Checkpoint | Access code | Opening date | Unsupported |
+|---|---|---|---|
+| `step-026000.pt` | `QF-4302358-Y` | `3 March 2042` | abstained; raw span `East Annex` |
+| `best.pt` (step 25,000) | `QF-4302358-Y` | `3 March 2042` | abstained; raw span `East Annex` |
 
-| Checkpoint | Step | Access code | Opening date | Unsupported prediction | Unsupported null margin |
-|---|---:|---|---|---|---:|
-| `step-026000.pt` | 26,000 | exact | exact | empty | -1.7047357559204102 |
-| `best.pt` | 25,000 | exact | exact | empty | -2.4117496013641357 |
-
-W&B synced all five files. The pod was then stopped through RunPod and verified
-with `desiredStatus=EXITED`.
+Both probes answered the two supported questions and abstained on the
+unsupported question. The run directory is on the persistent remote volume;
+only this report was added to the repository.
