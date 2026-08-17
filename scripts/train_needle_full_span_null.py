@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 
 from grounded_qa.needle_full_span_qa import NeedleFullSpanNullModel
 from grounded_qa.needle_span_qa import best_spans, span_null_loss
@@ -50,6 +51,17 @@ def gate_indices(rows: dict[str, torch.Tensor], kind: str) -> torch.Tensor:
     if kind == "mixed":
         return torch.cat((answerable[:32], unanswerable[:32]))
     raise ValueError(f"unknown gate: {kind}")
+
+
+def span_only_loss(
+    output,
+    gold_start: torch.Tensor,
+    gold_end: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Train only against context positions; NULL is excluded from this softmax."""
+    start_loss = F.cross_entropy(output.start_logits[:, 1:].float(), gold_start - 1)
+    end_loss = F.cross_entropy(output.end_logits[:, 1:].float(), gold_end - 1)
+    return start_loss + end_loss, start_loss, end_loss
 
 
 @torch.inference_mode()
@@ -142,6 +154,7 @@ def evaluate(
     precision: torch.dtype | None,
     *,
     max_rows: int | None = None,
+    reader_only: bool = False,
 ) -> dict[str, float]:
     model.eval()
     limit = min(max_rows, len(metadata)) if max_rows is not None else len(metadata)
@@ -155,11 +168,16 @@ def evaluate(
         source, valid, context, gold_start, gold_end, answerable = batch(rows, indices, device)
         with torch.autocast(device_type="cuda", dtype=precision, enabled=precision is not None and device.type == "cuda"):
             output = model(source, valid, context)
-            loss, _, _ = span_null_loss(output, gold_start, gold_end)
+            loss_fn = span_only_loss if reader_only else span_null_loss
+            loss, _, _ = loss_fn(output, gold_start, gold_end)
         losses.append(float(loss))
         best_start, best_end, _, margin = best_spans(output)
-        argmax_start = output.start_logits.argmax(dim=1)
-        argmax_end = output.end_logits.argmax(dim=1)
+        if reader_only:
+            argmax_start = output.start_logits[:, 1:].argmax(dim=1) + 1
+            argmax_end = output.end_logits[:, 1:].argmax(dim=1) + 1
+        else:
+            argmax_start = output.start_logits.argmax(dim=1)
+            argmax_end = output.end_logits.argmax(dim=1)
         has = answerable.bool()
         no = ~has
         has_rows += int(has.sum())
@@ -227,6 +245,7 @@ def main() -> None:
     parser.add_argument("--wandb-project", default="grounded-attn-qa")
     parser.add_argument("--wandb-run-name", default="needle-full-decoder-span-null-squad2")
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--reader-only", action="store_true", help="Train answerable rows with NULL excluded from the span loss.")
     parser.add_argument(
         "--answerable-fraction",
         type=float,
@@ -274,12 +293,25 @@ def main() -> None:
             optimizer.load_state_dict(state["optimizer"])
             start_step = int(state["step"])
 
-        quick_zero = evaluate(model, validation_rows, validation_metadata, tokenizer, device, args.batch_size, precision, max_rows=args.quick_eval_rows)
+        quick_zero = evaluate(
+            model,
+            validation_rows,
+            validation_metadata,
+            tokenizer,
+            device,
+            args.batch_size,
+            precision,
+            max_rows=args.quick_eval_rows,
+            reader_only=args.reader_only,
+        )
         log({f"quick/{key}": value for key, value in quick_zero.items()}, start_step)
         best_f1 = -1.0
-        if args.answerable_fraction is not None:
-            answerable_indices = torch.where(train_rows["answerable"])[0]
+        answerable_indices = torch.where(train_rows["answerable"])[0]
+        if args.reader_only or args.answerable_fraction is not None:
             unanswerable_indices = torch.where(~train_rows["answerable"])[0]
+        if args.reader_only and not len(answerable_indices):
+            raise RuntimeError("reader-only sampling requires answerable training rows")
+        if args.answerable_fraction is not None:
             answerable_per_batch = round(args.batch_size * args.answerable_fraction)
             answerable_per_batch = min(max(answerable_per_batch, 1), args.batch_size - 1)
             if not len(answerable_indices) or not len(unanswerable_indices):
@@ -298,10 +330,17 @@ def main() -> None:
             indices = torch.cat((has, no))
             return indices[torch.randperm(len(indices), generator=generator)]
 
-        order = torch.randperm(len(train_rows["source_ids"]), generator=torch.Generator().manual_seed(args.seed))
+        order_source = answerable_indices if args.reader_only else torch.arange(len(train_rows["source_ids"]))
+        order = order_source[torch.randperm(len(order_source), generator=torch.Generator().manual_seed(args.seed))]
         cursor = 0
         for step in range(start_step + 1, args.max_steps + 1):
-            if args.answerable_fraction is None:
+            if args.reader_only:
+                if cursor + args.batch_size > len(order):
+                    order = answerable_indices[torch.randperm(len(answerable_indices), generator=torch.Generator().manual_seed(args.seed + step))]
+                    cursor = 0
+                indices = order[cursor : cursor + args.batch_size]
+                cursor += args.batch_size
+            elif args.answerable_fraction is None:
                 if cursor + args.batch_size > len(order):
                     order = torch.randperm(len(train_rows["source_ids"]), generator=torch.Generator().manual_seed(args.seed + step))
                     cursor = 0
@@ -313,16 +352,36 @@ def main() -> None:
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type="cuda", dtype=precision, enabled=precision is not None and device.type == "cuda"):
                 output = model(source, valid, context)
-                loss, start_loss, end_loss = span_null_loss(output, gold_start, gold_end)
+                loss_fn = span_only_loss if args.reader_only else span_null_loss
+                loss, start_loss, end_loss = loss_fn(output, gold_start, gold_end)
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
 
             if step % args.eval_every == 0 or step == 1:
-                quick = evaluate(model, validation_rows, validation_metadata, tokenizer, device, args.batch_size, precision, max_rows=args.quick_eval_rows)
+                quick = evaluate(
+                    model,
+                    validation_rows,
+                    validation_metadata,
+                    tokenizer,
+                    device,
+                    args.batch_size,
+                    precision,
+                    max_rows=args.quick_eval_rows,
+                    reader_only=args.reader_only,
+                )
                 log({"train/loss": float(loss), "train/start_loss": float(start_loss), "train/end_loss": float(end_loss), "train/grad_norm": float(grad_norm), **{f"quick/{key}": value for key, value in quick.items()}}, step)
             if step % args.full_eval_every == 0 or step == args.max_steps:
-                full = evaluate(model, validation_rows, validation_metadata, tokenizer, device, args.batch_size, precision)
+                full = evaluate(
+                    model,
+                    validation_rows,
+                    validation_metadata,
+                    tokenizer,
+                    device,
+                    args.batch_size,
+                    precision,
+                    reader_only=args.reader_only,
+                )
                 log({f"val/{key}": value for key, value in full.items()}, step)
                 if full["threshold/f1"] > best_f1:
                     best_f1 = full["threshold/f1"]
