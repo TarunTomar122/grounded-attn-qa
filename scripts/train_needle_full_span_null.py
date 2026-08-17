@@ -227,8 +227,16 @@ def main() -> None:
     parser.add_argument("--wandb-project", default="grounded-attn-qa")
     parser.add_argument("--wandb-run-name", default="needle-full-decoder-span-null-squad2")
     parser.add_argument("--resume", type=Path)
+    parser.add_argument(
+        "--answerable-fraction",
+        type=float,
+        help="Sample this fraction of each training batch from answerable rows; omit to use the original shuffled stream.",
+    )
     parser.add_argument("--skip-gates", action="store_true")
     args = parser.parse_args()
+
+    if args.answerable_fraction is not None and not 0.0 < args.answerable_fraction < 1.0:
+        parser.error("--answerable-fraction must be between 0 and 1")
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -269,14 +277,38 @@ def main() -> None:
         quick_zero = evaluate(model, validation_rows, validation_metadata, tokenizer, device, args.batch_size, precision, max_rows=args.quick_eval_rows)
         log({f"quick/{key}": value for key, value in quick_zero.items()}, start_step)
         best_f1 = -1.0
+        if args.answerable_fraction is not None:
+            answerable_indices = torch.where(train_rows["answerable"])[0]
+            unanswerable_indices = torch.where(~train_rows["answerable"])[0]
+            answerable_per_batch = round(args.batch_size * args.answerable_fraction)
+            answerable_per_batch = min(max(answerable_per_batch, 1), args.batch_size - 1)
+            if not len(answerable_indices) or not len(unanswerable_indices):
+                raise RuntimeError("answerable-fraction sampling requires both row types")
+
+        def sample_indices(step: int) -> torch.Tensor:
+            if args.answerable_fraction is None:
+                raise RuntimeError("fractional sampler is disabled")
+            generator = torch.Generator().manual_seed(args.seed + 1_000_003 * step)
+            has = answerable_indices[
+                torch.randint(len(answerable_indices), (answerable_per_batch,), generator=generator)
+            ]
+            no = unanswerable_indices[
+                torch.randint(len(unanswerable_indices), (args.batch_size - answerable_per_batch,), generator=generator)
+            ]
+            indices = torch.cat((has, no))
+            return indices[torch.randperm(len(indices), generator=generator)]
+
         order = torch.randperm(len(train_rows["source_ids"]), generator=torch.Generator().manual_seed(args.seed))
         cursor = 0
         for step in range(start_step + 1, args.max_steps + 1):
-            if cursor + args.batch_size > len(order):
-                order = torch.randperm(len(train_rows["source_ids"]), generator=torch.Generator().manual_seed(args.seed + step))
-                cursor = 0
-            indices = order[cursor : cursor + args.batch_size]
-            cursor += args.batch_size
+            if args.answerable_fraction is None:
+                if cursor + args.batch_size > len(order):
+                    order = torch.randperm(len(train_rows["source_ids"]), generator=torch.Generator().manual_seed(args.seed + step))
+                    cursor = 0
+                indices = order[cursor : cursor + args.batch_size]
+                cursor += args.batch_size
+            else:
+                indices = sample_indices(step)
             source, valid, context, gold_start, gold_end, _ = batch(train_rows, indices, device)
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type="cuda", dtype=precision, enabled=precision is not None and device.type == "cuda"):
