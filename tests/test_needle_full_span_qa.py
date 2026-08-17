@@ -3,6 +3,7 @@ import torch
 from grounded_qa.needle_full_span_qa import NeedleFullSpanNullModel
 from grounded_qa.needle_span_qa import best_spans, span_null_loss
 from grounded_qa.needleish import NeedleConfig
+from scripts.train_needle_full_span_null import span_only_loss
 
 
 def tiny_config() -> NeedleConfig:
@@ -52,3 +53,19 @@ def test_full_span_null_loss_reaches_decoder_cross_attention() -> None:
     assert model.end_pointer.pointer_q.weight.grad is not None
     start, end, _, _ = best_spans(output)
     assert start.shape == end.shape == (1,)
+
+
+def test_reader_only_loss_ignores_null_rows() -> None:
+    output = type("Output", (), {
+        "start_logits": torch.tensor([[0.0, 1.0, 2.0], [0.0, 3.0, 4.0]]),
+        "end_logits": torch.tensor([[0.0, 2.0, 1.0], [0.0, 4.0, 3.0]]),
+    })()
+    loss, _, _ = span_only_loss(
+        output,
+        torch.tensor([2, -1]),
+        torch.tensor([1, -1]),
+        torch.tensor([True, False]),
+    )
+    expected = torch.nn.functional.cross_entropy(output.start_logits[:1, 1:], torch.tensor([1]))
+    expected += torch.nn.functional.cross_entropy(output.end_logits[:1, 1:], torch.tensor([0]))
+    torch.testing.assert_close(loss, expected)

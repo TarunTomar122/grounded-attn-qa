@@ -57,10 +57,23 @@ def span_only_loss(
     output,
     gold_start: torch.Tensor,
     gold_end: torch.Tensor,
+    answerable: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Train only against context positions; NULL is excluded from this softmax."""
-    start_loss = F.cross_entropy(output.start_logits[:, 1:].float(), gold_start - 1)
-    end_loss = F.cross_entropy(output.end_logits[:, 1:].float(), gold_end - 1)
+    if answerable is not None:
+        answerable = answerable.bool()
+        if not answerable.any():
+            zero = output.start_logits.new_zeros((), dtype=torch.float32)
+            return zero, zero, zero
+        start_logits = output.start_logits[answerable, 1:]
+        end_logits = output.end_logits[answerable, 1:]
+        gold_start = gold_start[answerable]
+        gold_end = gold_end[answerable]
+    else:
+        start_logits = output.start_logits[:, 1:]
+        end_logits = output.end_logits[:, 1:]
+    start_loss = F.cross_entropy(start_logits.float(), gold_start - 1)
+    end_loss = F.cross_entropy(end_logits.float(), gold_end - 1)
     return start_loss + end_loss, start_loss, end_loss
 
 
@@ -168,8 +181,10 @@ def evaluate(
         source, valid, context, gold_start, gold_end, answerable = batch(rows, indices, device)
         with torch.autocast(device_type="cuda", dtype=precision, enabled=precision is not None and device.type == "cuda"):
             output = model(source, valid, context)
-            loss_fn = span_only_loss if reader_only else span_null_loss
-            loss, _, _ = loss_fn(output, gold_start, gold_end)
+            if reader_only:
+                loss, _, _ = span_only_loss(output, gold_start, gold_end, answerable)
+            else:
+                loss, _, _ = span_null_loss(output, gold_start, gold_end)
         losses.append(float(loss))
         best_start, best_end, _, margin = best_spans(output)
         if reader_only:
