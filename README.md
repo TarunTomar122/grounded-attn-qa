@@ -113,8 +113,8 @@ machine. Start the demo server with the latest full span/NULL checkpoint:
 
 ```bash
 python scripts/serve_needle_demo.py \
-  --checkpoint /path/to/step-042000.pt \
-  --tokenizer /path/to/tokenizer.model
+  --checkpoint /workspace/runs/needle-reader-boost-90-10-v1/step-046000.pt \
+  --tokenizer /workspace/needle26-public/tokenizer.model
 ```
 
 Then open the page with `?api=http://127.0.0.1:8000`, or enter that API URL in
