@@ -3,154 +3,179 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Grounded attention-only reader</title>
+    <meta name="description" content="Try the grounded attention-only Needle reader on your own context." />
+    <title>Grounded Needle reader</title>
     <style>
-      :root {
-        color-scheme: light;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        color: #171717;
-        background: #f7f7f5;
-      }
-
+      :root { color-scheme: light; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; color: #151515; background: #f4f4f1; }
       * { box-sizing: border-box; }
-
       body { margin: 0; }
-
-      main {
-        width: min(860px, calc(100% - 32px));
-        margin: 0 auto;
-        padding: 56px 0 80px;
+      main { width: min(960px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 72px; }
+      header { display: grid; gap: 12px; margin-bottom: 32px; }
+      h1 { max-width: 680px; margin: 0; font-size: clamp(2rem, 5vw, 4rem); letter-spacing: -0.08em; line-height: 0.98; }
+      h2 { margin: 0; font-size: 0.95rem; letter-spacing: 0.02em; text-transform: uppercase; }
+      p { max-width: 690px; margin: 0; color: #5b5b57; line-height: 1.6; }
+      .eyebrow { color: #5b5b57; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; }
+      .connection, .workbench, .result { border-top: 1px solid #b9b9b3; padding-top: 18px; }
+      .connection { display: grid; gap: 12px; margin-bottom: 34px; }
+      .connection-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+      .workbench { display: grid; gap: 22px; }
+      .examples { display: flex; flex-wrap: wrap; gap: 8px; }
+      .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+      label { display: grid; gap: 8px; font-weight: 700; }
+      label span { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; }
+      input, textarea { width: 100%; border: 1px solid #999991; border-radius: 4px; background: #fff; color: inherit; font: inherit; line-height: 1.5; }
+      input { min-height: 42px; padding: 10px 12px; }
+      textarea { min-height: 260px; padding: 14px; resize: vertical; }
+      input:focus-visible, textarea:focus-visible, button:focus-visible { outline: 3px solid #4d4d48; outline-offset: 3px; }
+      button { border: 1px solid #202020; border-radius: 4px; padding: 10px 14px; background: #fff; color: #151515; font: inherit; cursor: pointer; }
+      button:hover { background: #e6e6e1; }
+      button[type="submit"], .primary { background: #151515; color: #fff; }
+      button:disabled { cursor: wait; opacity: 0.55; }
+      .status { min-height: 24px; color: #5b5b57; font-size: 0.82rem; }
+      .status[data-kind="error"] { color: #9c1c1c; }
+      .result { display: grid; gap: 14px; margin-top: 40px; }
+      .answer { min-height: 72px; padding: 18px; border-left: 4px solid #151515; background: #fff; white-space: pre-wrap; font-size: 1.1rem; line-height: 1.5; }
+      .answer.refusal { border-left-color: #8b8b84; color: #686861; }
+      dl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin: 0; border: 1px solid #c6c6c0; background: #c6c6c0; }
+      dl div { min-height: 72px; padding: 12px; background: #f8f8f5; }
+      dt { color: #686861; font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; }
+      dd { margin: 8px 0 0; overflow-wrap: anywhere; }
+      .note { font-size: 0.8rem; }
+      @media (max-width: 680px) {
+        main { padding-top: 32px; }
+        .connection-row, .fields, dl { grid-template-columns: 1fr; }
+        textarea { min-height: 190px; }
       }
-
-      h1 { margin: 0 0 10px; font-size: clamp(1.8rem, 4vw, 2.5rem); letter-spacing: -0.04em; }
-      p { color: #5b5b5b; line-height: 1.55; }
-      header { margin-bottom: 36px; }
-
-      form { display: grid; gap: 22px; }
-      label { display: grid; gap: 8px; font-weight: 650; }
-      textarea {
-        width: 100%;
-        min-height: 150px;
-        padding: 14px;
-        border: 1px solid #bdbdb8;
-        border-radius: 8px;
-        background: #fff;
-        color: inherit;
-        font: inherit;
-        line-height: 1.5;
-        resize: vertical;
-      }
-
-      textarea:focus, button:focus-visible { outline: 3px solid #777; outline-offset: 2px; }
-      .examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 24px; }
-      button { border: 1px solid #222; border-radius: 999px; padding: 10px 16px; background: #fff; color: #171717; font: inherit; cursor: pointer; }
-      button:hover { background: #ededeb; }
-      button[type="submit"] { justify-self: start; border-radius: 8px; background: #171717; color: #fff; }
-      button[type="submit"]:disabled { opacity: 0.55; cursor: wait; }
-      .status { min-height: 24px; color: #5b5b5b; font-size: 0.95rem; }
-      .result { margin-top: 36px; padding-top: 24px; border-top: 1px solid #d2d2cc; }
-      .result h2 { margin: 0 0 10px; font-size: 1.05rem; }
-      .answer { min-height: 52px; padding: 16px; border-left: 3px solid #171717; background: #fff; white-space: pre-wrap; }
-      .meta { margin-top: 10px; font-size: 0.85rem; color: #777; }
     </style>
   </head>
   <body>
     <main>
       <header>
-        <h1>Grounded attention-only reader</h1>
-        <p>Ask about the context. This released copy-phase checkpoint is strongest when the answer is present; refusal training comes later.</p>
-        <div class="status" id="status" role="status">Loading checkpoint…</div>
+        <div class="eyebrow">Needle · grounded QA</div>
+        <h1>Ask the context.<br />Trust the span.</h1>
+        <p>Run the full pretrained attention-only reader on a context you provide. The model can only return text copied from the context or refuse.</p>
       </header>
 
-      <div class="examples" aria-label="Examples">
-        <button type="button" data-example="copy">Copy example</button>
-        <button type="button" data-example="refuse">Missing-answer test</button>
-        <button type="button" data-example="city">City example</button>
-      </div>
+      <section class="connection" aria-labelledby="connection-title">
+        <h2 id="connection-title">Inference service</h2>
+        <div class="connection-row">
+          <label for="api-url"><span>API URL</span><input id="api-url" type="url" placeholder="http://127.0.0.1:8000" /></label>
+          <button class="primary" id="connect" type="button">Connect</button>
+        </div>
+        <div class="status" id="status" role="status" aria-live="polite">Enter the URL of the running Needle demo server.</div>
+        <p class="note">The GitHub Page is the interface. The checkpoint stays on the inference machine and is never downloaded into your browser.</p>
+      </section>
 
-      <form id="qa-form">
-        <label>
-          Context
-          <textarea id="context" required spellcheck="true"></textarea>
-        </label>
-        <label>
-          Question
-          <textarea id="question" required rows="3" spellcheck="true"></textarea>
-        </label>
-        <button type="submit" id="run">Run model</button>
-      </form>
+      <section class="workbench" aria-labelledby="workbench-title">
+        <h2 id="workbench-title">Custom probe</h2>
+        <div class="examples" aria-label="Load an example">
+          <button type="button" data-example="code">Unknown access code</button>
+          <button type="button" data-example="date">Unknown date</button>
+          <button type="button" data-example="missing">Unsupported question</button>
+        </div>
 
-      <section class="result" aria-live="polite">
-        <h2>Model output</h2>
-        <div class="answer" id="answer">Run an example or enter your own context.</div>
-        <div class="meta" id="meta"></div>
+        <form id="qa-form">
+          <div class="fields">
+            <label for="context"><span>Context</span><textarea id="context" required aria-describedby="context-help" spellcheck="true"></textarea></label>
+            <label for="question"><span>Question</span><textarea id="question" required aria-describedby="question-help" spellcheck="true"></textarea></label>
+          </div>
+          <p class="note" id="context-help">Use facts the model has never seen before. The context and question must fit the checkpoint window.</p>
+          <p class="note" id="question-help">Ask one direct question. Try changing the subject or relation to test grounding.</p>
+          <button class="primary" id="run" type="submit">Run checkpoint</button>
+          <div class="status" id="run-status" role="status" aria-live="polite"></div>
+        </form>
+      </section>
+
+      <section class="result" aria-labelledby="result-title" aria-live="polite">
+        <h2 id="result-title">Model output</h2>
+        <div class="answer" id="answer">Load an example or write your own probe.</div>
+        <dl>
+          <div><dt>Decision</dt><dd id="decision">—</dd></div>
+          <div><dt>Raw span</dt><dd id="raw-span">—</dd></div>
+          <div><dt>NULL margin</dt><dd id="margin">—</dd></div>
+          <div><dt>Input tokens</dt><dd id="tokens">—</dd></div>
+        </dl>
       </section>
     </main>
 
     <script>
       const examples = {
-        copy: {
-          context: "Jane Diaz is the CEO of Acme Corp. In 2023, Acme Corp reported revenue of $4.2 billion.",
-          question: "Who is the CEO of Acme Corp?"
-        },
-        refuse: {
-          context: "Jane Diaz is the CEO of Acme Corp. Acme Corp reported revenue of $4.2 billion in 2023.",
-          question: "Who is the CEO of Northwind?"
-        },
-        city: {
-          context: "Kyoto is a city in Japan with about 1.46 million people.",
-          question: "Which country is Kyoto in?"
-        }
+        code: { context: "Kifa's access code is AB-91827-X. Nuvora's access code is QF-4302358-Y. Torven's access code is LM-77301-P.", question: "What is Nuvora's access code?" },
+        date: { context: "The Lattice Ferry opened to public service on 3 March 2042 after its safety review. Its first prototype sailed in 2040.", question: "When did the Lattice Ferry open to public service?" },
+        missing: { context: "The transfer record lists reference ST-92 and a destination in East Annex. It records no authorizing official.", question: "Which official authorized the sealed transfer?" }
       };
 
+      const apiUrl = document.querySelector("#api-url");
       const context = document.querySelector("#context");
       const question = document.querySelector("#question");
       const answer = document.querySelector("#answer");
-      const meta = document.querySelector("#meta");
+      const decision = document.querySelector("#decision");
+      const rawSpan = document.querySelector("#raw-span");
+      const margin = document.querySelector("#margin");
+      const tokens = document.querySelector("#tokens");
       const status = document.querySelector("#status");
+      const runStatus = document.querySelector("#run-status");
       const run = document.querySelector("#run");
+      const apiFromUrl = new URLSearchParams(location.search).get("api");
+      apiUrl.value = apiFromUrl || localStorage.getItem("needle-demo-api") || "http://127.0.0.1:8000";
 
+      function baseUrl() { return apiUrl.value.trim().replace(/\/+$/, ""); }
+      function setStatus(node, text, kind = "") { node.textContent = text; node.dataset.kind = kind; }
       function loadExample(name) {
         context.value = examples[name].context;
         question.value = examples[name].question;
         answer.textContent = "Ready to run.";
-        meta.textContent = "";
+        answer.classList.remove("refusal");
+        decision.textContent = rawSpan.textContent = margin.textContent = tokens.textContent = "—";
+        setStatus(runStatus, "");
       }
 
-      document.querySelectorAll("[data-example]").forEach((button) => {
-        button.addEventListener("click", () => loadExample(button.dataset.example));
-      });
+      async function connect() {
+        setStatus(status, "Connecting…");
+        try {
+          const response = await fetch(`${baseUrl()}/api/status`);
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "Service unavailable");
+          localStorage.setItem("needle-demo-api", baseUrl());
+          setStatus(status, `Ready · ${data.device} · ${(data.parameters / 1e6).toFixed(1)}M parameters · ${data.checkpoint} step ${data.step ?? "?"}`);
+        } catch (error) {
+          setStatus(status, `Could not connect: ${error.message}`, "error");
+        }
+      }
 
+      document.querySelector("#connect").addEventListener("click", connect);
+      document.querySelectorAll("[data-example]").forEach((button) => button.addEventListener("click", () => loadExample(button.dataset.example)));
       document.querySelector("#qa-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         run.disabled = true;
+        setStatus(runStatus, "Running the checkpoint…");
         answer.textContent = "Running…";
-        meta.textContent = "";
+        answer.classList.remove("refusal");
         try {
-          const response = await fetch("/api/predict", {
+          const response = await fetch(`${baseUrl()}/api/predict`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ context: context.value, question: question.value })
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || "Request failed");
-          answer.textContent = data.answer || "(empty output)";
-          meta.textContent = `${data.input_tokens} input tokens · ${data.device}${data.refuse ? " · refusal" : ""}`;
+          answer.textContent = data.refuse ? "I don't know from this context." : data.answer || "(empty span)";
+          answer.classList.toggle("refusal", data.refuse);
+          decision.textContent = data.refuse ? "REFUSE" : "ANSWER";
+          rawSpan.textContent = data.raw_span || "(empty)";
+          margin.textContent = Number(data.null_margin).toFixed(3) + ` / ${Number(data.threshold).toFixed(3)}`;
+          tokens.textContent = data.input_tokens;
+          setStatus(runStatus, `${data.device} · ${data.checkpoint} · step ${data.step ?? "?"}`);
         } catch (error) {
           answer.textContent = error.message;
+          setStatus(runStatus, "The request failed.", "error");
         } finally {
           run.disabled = false;
         }
       });
 
-      fetch("/api/status")
-        .then((response) => response.json())
-        .then((data) => {
-          status.textContent = `Ready · ${data.device} · ${(data.parameters / 1e6).toFixed(1)}M parameters`;
-        })
-        .catch(() => { status.textContent = "The local model server is unavailable."; });
-
-      loadExample("copy");
+      loadExample("code");
+      connect();
     </script>
   </body>
 </html>

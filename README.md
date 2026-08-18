@@ -104,3 +104,19 @@ and synced as [W&B run hai3wnwa](https://wandb.ai/tomartarun2001-adobe/grounded-
 The old `train.py`, `data.py`, and released causal checkpoint are retained only
 as legacy artifacts from the previous experiment; all redo commands use the
 `grounded_qa/` package and `scripts/` entrypoints.
+
+## Browser demo
+
+Try the current grounded reader in the [Needle browser demo](https://taruntomar122.github.io/grounded-attn-qa/).
+The GitHub Page is a static frontend; the checkpoint stays on the inference
+machine. Start the demo server with the latest full span/NULL checkpoint:
+
+```bash
+python scripts/serve_needle_demo.py \
+  --checkpoint /path/to/step-042000.pt \
+  --tokenizer /path/to/tokenizer.model
+```
+
+Then open the page with `?api=http://127.0.0.1:8000`, or enter that API URL in
+the page. You can paste arbitrary context and questions; the server returns an
+answer copied from the context or a refusal.
