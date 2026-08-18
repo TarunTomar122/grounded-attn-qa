@@ -14,6 +14,8 @@ from .pointer import PointerGenerator
 class FullSpanNullOutput:
     start_logits: torch.Tensor
     end_logits: torch.Tensor
+    independent_start_logits: torch.Tensor
+    independent_end_logits: torch.Tensor
     memory: torch.Tensor
     decoder_hidden: torch.Tensor
 
@@ -22,9 +24,9 @@ class NeedleFullSpanNullModel(nn.Module):
     """Full pretrained Needle encoder-decoder source pointer with first-class NULL.
 
     The decoder runs two learned decisions from the public Needle decoder-start
-    token. Each decision scores NULL against every valid context position. No
-    vocabulary distribution is used, so every non-NULL prediction is grounded
-    in the supplied context.
+    token. Each joint decision scores NULL against every valid context position.
+    A second source-only pointer pair learns answer localization without NULL
+    competition, while all heads share the same pretrained backbone.
     """
 
     def __init__(self, cfg: NeedleConfig | None = None) -> None:
@@ -33,8 +35,12 @@ class NeedleFullSpanNullModel(nn.Module):
         self.backbone = NeedleishModel(self.cfg)
         self.start_pointer = PointerGenerator(self.cfg.d_model)
         self.end_pointer = PointerGenerator(self.cfg.d_model)
+        self.independent_start_pointer = PointerGenerator(self.cfg.d_model)
+        self.independent_end_pointer = PointerGenerator(self.cfg.d_model)
         self.start_pointer.apply(NeedleishModel._init)
         self.end_pointer.apply(NeedleishModel._init)
+        self.independent_start_pointer.apply(NeedleishModel._init)
+        self.independent_end_pointer.apply(NeedleishModel._init)
         self.null_start_key = nn.Parameter(torch.empty(self.cfg.d_model))
         self.null_end_key = nn.Parameter(torch.empty(self.cfg.d_model))
         self.null_start_bias = nn.Parameter(torch.zeros(()))
@@ -74,11 +80,48 @@ class NeedleFullSpanNullModel(nn.Module):
         end_logits = torch.einsum("btd,bsd->bts", end_query, end_key) / math.sqrt(self.cfg.d_model)
         end_logits = end_logits.masked_fill(~valid_context[:, None, :], float("-inf"))
 
+        independent_start_query = self.independent_start_pointer.pointer_q(decoder_hidden[:, 0:1])
+        independent_start_key = self.independent_start_pointer.pointer_k(memory)
+        independent_start_logits = torch.einsum(
+            "btd,bsd->bts", independent_start_query, independent_start_key
+        ) / math.sqrt(self.cfg.d_model)
+        independent_start_logits = independent_start_logits.masked_fill(
+            ~valid_context[:, None, :], float("-inf")
+        )
+
+        independent_end_query = self.independent_end_pointer.pointer_q(decoder_hidden[:, 1:2])
+        independent_end_key = self.independent_end_pointer.pointer_k(memory)
+        independent_end_logits = torch.einsum(
+            "btd,bsd->bts", independent_end_query, independent_end_key
+        ) / math.sqrt(self.cfg.d_model)
+        independent_end_logits = independent_end_logits.masked_fill(
+            ~valid_context[:, None, :], float("-inf")
+        )
+
         null_start = self.null_start_bias + decoder_hidden[:, 0] @ self.null_start_key / math.sqrt(self.cfg.d_model)
         null_end = self.null_end_bias + decoder_hidden[:, 1] @ self.null_end_key / math.sqrt(self.cfg.d_model)
         return FullSpanNullOutput(
             start_logits=torch.cat((null_start[:, None], start_logits[:, 0]), dim=1),
             end_logits=torch.cat((null_end[:, None], end_logits[:, 0]), dim=1),
+            independent_start_logits=independent_start_logits[:, 0],
+            independent_end_logits=independent_end_logits[:, 0],
             memory=memory,
             decoder_hidden=decoder_hidden,
         )
+
+
+def load_compatible_state_dict(model: nn.Module, state_dict: dict[str, torch.Tensor]) -> bool:
+    """Load old checkpoints, which predate the independent pointer pair."""
+    incompatible = model.load_state_dict(state_dict, strict=False)
+    unexpected = set(incompatible.unexpected_keys)
+    unexpected_missing = {
+        key
+        for key in incompatible.missing_keys
+        if not key.startswith(("independent_start_pointer.", "independent_end_pointer."))
+    }
+    if unexpected or unexpected_missing:
+        raise RuntimeError(
+            f"incompatible Needle checkpoint: missing={sorted(unexpected_missing)}, "
+            f"unexpected={sorted(unexpected)}"
+        )
+    return bool(incompatible.missing_keys)

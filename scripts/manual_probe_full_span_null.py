@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 
-from grounded_qa.needle_full_span_qa import NeedleFullSpanNullModel
+from grounded_qa.needle_full_span_qa import NeedleFullSpanNullModel, load_compatible_state_dict
 from grounded_qa.needle_span_qa import best_spans
 from grounded_qa.needle_tokenizer import TOOLS_ID, NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig
@@ -79,7 +79,7 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = NeedleFullSpanNullModel(NeedleConfig.public_checkpoint()).to(device).eval()
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    model.load_state_dict(state["model"])
+    load_compatible_state_dict(model, state["model"])
     tokenizer = NeedleTokenizer(args.tokenizer, append_markers=False)
     result = {
         "checkpoint": str(args.checkpoint),

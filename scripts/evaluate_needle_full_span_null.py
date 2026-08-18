@@ -7,7 +7,7 @@ from typing import Any
 
 import torch
 
-from grounded_qa.needle_full_span_qa import NeedleFullSpanNullModel
+from grounded_qa.needle_full_span_qa import NeedleFullSpanNullModel, load_compatible_state_dict
 from grounded_qa.needle_span_qa import best_spans
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig, load_public_checkpoint
@@ -21,7 +21,7 @@ def load_model(path: Path, device: torch.device) -> NeedleFullSpanNullModel:
         load_public_checkpoint(model.backbone, path)
     else:
         state = torch.load(path, map_location="cpu", weights_only=False)
-        model.load_state_dict(state["model"])
+        load_compatible_state_dict(model, state["model"])
     return model.eval()
 
 

@@ -1,9 +1,12 @@
 import torch
 
-from grounded_qa.needle_full_span_qa import NeedleFullSpanNullModel
+from grounded_qa.needle_full_span_qa import (
+    NeedleFullSpanNullModel,
+    load_compatible_state_dict,
+)
 from grounded_qa.needle_span_qa import best_spans, span_null_loss
 from grounded_qa.needleish import NeedleConfig
-from scripts.train_needle_full_span_null import span_only_loss
+from scripts.train_needle_full_span_null import independent_span_loss, span_only_loss
 
 
 def tiny_config() -> NeedleConfig:
@@ -31,11 +34,16 @@ def test_full_span_null_uses_decoder_and_masks_non_context_positions() -> None:
 
     assert output.start_logits.shape == (1, 9)
     assert output.end_logits.shape == (1, 9)
+    assert output.independent_start_logits.shape == (1, 8)
+    assert output.independent_end_logits.shape == (1, 8)
     assert output.decoder_hidden.shape == (1, 2, 8)
     assert torch.isfinite(output.start_logits[:, 0]).all()
     assert torch.isfinite(output.start_logits[:, 3:6]).all()
     assert torch.isneginf(output.start_logits[:, 1:3]).all()
     assert torch.isneginf(output.start_logits[:, 6:]).all()
+    assert torch.isneginf(output.independent_start_logits[:, :2]).all()
+    assert torch.isfinite(output.independent_start_logits[:, 2:5]).all()
+    assert torch.isneginf(output.independent_start_logits[:, 5:]).all()
 
 
 def test_full_span_null_loss_reaches_decoder_cross_attention() -> None:
@@ -55,6 +63,22 @@ def test_full_span_null_loss_reaches_decoder_cross_attention() -> None:
     assert start.shape == end.shape == (1,)
 
 
+def test_independent_span_loss_reaches_independent_pointer() -> None:
+    model = NeedleFullSpanNullModel(tiny_config())
+    source = torch.tensor([[4, 5, 6, 7, 8, 0, 0, 0]])
+    valid = torch.tensor([[True, True, True, True, True, False, False, False]])
+    context = torch.tensor([[False, False, True, True, True, False, False, False]])
+    output = model(source, valid, context)
+    loss, _, _ = independent_span_loss(
+        output, torch.tensor([3]), torch.tensor([4]), torch.tensor([True])
+    )
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert model.independent_start_pointer.pointer_q.weight.grad is not None
+    assert model.independent_end_pointer.pointer_q.weight.grad is not None
+
+
 def test_reader_only_loss_ignores_null_rows() -> None:
     output = type("Output", (), {
         "start_logits": torch.tensor([[0.0, 1.0, 2.0], [0.0, 3.0, 4.0]]),
@@ -69,3 +93,26 @@ def test_reader_only_loss_ignores_null_rows() -> None:
     expected = torch.nn.functional.cross_entropy(output.start_logits[:1, 1:], torch.tensor([1]))
     expected += torch.nn.functional.cross_entropy(output.end_logits[:1, 1:], torch.tensor([0]))
     torch.testing.assert_close(loss, expected)
+
+
+def test_independent_span_loss_ignores_unanswerable_rows() -> None:
+    output = type("Output", (), {
+        "independent_start_logits": torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
+        "independent_end_logits": torch.tensor([[3.0, 2.0, 1.0], [6.0, 5.0, 4.0]]),
+    })()
+    loss, _, _ = independent_span_loss(
+        output,
+        torch.tensor([3, 0]),
+        torch.tensor([1, 0]),
+        torch.tensor([True, False]),
+    )
+    expected = torch.nn.functional.cross_entropy(output.independent_start_logits[:1], torch.tensor([2]))
+    expected += torch.nn.functional.cross_entropy(output.independent_end_logits[:1], torch.tensor([0]))
+    torch.testing.assert_close(loss, expected)
+
+
+def test_old_checkpoint_loads_with_only_new_pointer_keys_missing() -> None:
+    source = NeedleFullSpanNullModel(tiny_config()).state_dict()
+    old = {key: value for key, value in source.items() if not key.startswith("independent_")}
+    restored = NeedleFullSpanNullModel(tiny_config())
+    assert load_compatible_state_dict(restored, old)
