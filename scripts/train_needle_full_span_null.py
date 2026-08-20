@@ -110,6 +110,45 @@ def auxiliary_targets(
     return starts, ends, available
 
 
+def independent_no_answer_loss(
+    output,
+    answerable: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Train the existing NULL score as an independent binary classifier."""
+    target = (~answerable.bool()).to(dtype=torch.float32)
+    null_score = output.start_logits[:, 0].float() + output.end_logits[:, 0].float()
+    loss = F.binary_cross_entropy_with_logits(null_score, target)
+    return loss, null_score
+
+
+def ranking_metrics(scores: list[float], targets: list[int]) -> tuple[float, float]:
+    """Return ROC AUC and average precision for a binary score."""
+    positives = sum(targets)
+    negatives = len(targets) - positives
+    if not positives or not negatives:
+        return 0.0, 0.0
+    ascending = sorted(zip(scores, targets), key=lambda item: item[0])
+    positive_ranks = sum(rank for rank, (_, target) in enumerate(ascending, start=1) if target)
+    auc = (positive_ranks - positives * (positives + 1) / 2) / (positives * negatives)
+    precision_sum = 0.0
+    seen = 0
+    for rank, (_, target) in enumerate(sorted(zip(scores, targets), reverse=True), start=1):
+        seen += target
+        if target:
+            precision_sum += seen / rank
+    return auc, precision_sum / positives
+
+
+def quantile(values: list[float], fraction: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
 @torch.inference_mode()
 def measure_gate(
     model: NeedleFullSpanNullModel,
@@ -216,6 +255,8 @@ def evaluate(
     has_start = has_end = no_start = no_end = 0
     extraction_start = extraction_end = 0
     extraction_predictions: list[str] = []
+    null_scores: list[float] = []
+    null_targets: list[int] = []
     for offset in range(0, limit, batch_size):
         indices = torch.arange(offset, min(offset + batch_size, limit))
         source, valid, context, gold_start, gold_end, answerable = batch(rows, indices, device)
@@ -246,6 +287,8 @@ def evaluate(
         for local, start, end, row_margin in zip(range(len(indices)), best_start.tolist(), best_end.tolist(), margin.tolist()):
             raw_predictions.append(answer_text(tokenizer, source[local].cpu(), start, end))
             margins.append(float(row_margin))
+        null_scores.extend((output.start_logits[:, 0] + output.end_logits[:, 0]).float().tolist())
+        null_targets.extend((~answerable.bool()).int().tolist())
         extraction_best_start, extraction_best_end, _, _ = best_spans_from_logits(
             output.extraction_start_logits,
             output.extraction_end_logits,
@@ -261,6 +304,9 @@ def evaluate(
     extraction_summary = summarize(eval_metadata, extraction_predictions, [0.0] * len(margins), float("inf"))
     has_margin = [margins[i] for i, row in enumerate(eval_metadata) if row["answerable"]]
     no_margin = [margins[i] for i, row in enumerate(eval_metadata) if not row["answerable"]]
+    has_null_scores = [null_scores[i] for i, row in enumerate(eval_metadata) if row["answerable"]]
+    no_null_scores = [null_scores[i] for i, row in enumerate(eval_metadata) if not row["answerable"]]
+    answerability_auc, answerability_auprc = ranking_metrics(null_scores, null_targets)
     return {
         "loss": sum(losses) / max(len(losses), 1),
         "has_answer/start_accuracy": has_start / max(has_rows, 1),
@@ -283,6 +329,16 @@ def evaluate(
         "threshold/false_answer_rate": threshold_summary["false_answer_rate"],
         "margin/has_answer_mean": sum(has_margin) / max(len(has_margin), 1),
         "margin/no_answer_mean": sum(no_margin) / max(len(no_margin), 1),
+        "margin/has_answer_p10": quantile(has_margin, 0.10),
+        "margin/has_answer_p50": quantile(has_margin, 0.50),
+        "margin/has_answer_p90": quantile(has_margin, 0.90),
+        "margin/no_answer_p10": quantile(no_margin, 0.10),
+        "margin/no_answer_p50": quantile(no_margin, 0.50),
+        "margin/no_answer_p90": quantile(no_margin, 0.90),
+        "answerability/auc": answerability_auc,
+        "answerability/auprc": answerability_auprc,
+        "answerability/null_logit_has_mean": sum(has_null_scores) / max(len(has_null_scores), 1),
+        "answerability/null_logit_no_mean": sum(no_null_scores) / max(len(no_null_scores), 1),
         "rows": float(limit),
     }
 
@@ -317,6 +373,8 @@ def main() -> None:
     parser.add_argument("--reader-only", action="store_true", help="Train answerable rows with NULL excluded from the span loss.")
     parser.add_argument("--independent-extraction", action="store_true", help="Add a source-only span objective alongside the joint span/NULL objective.")
     parser.add_argument("--extraction-loss-weight", type=float, default=1.0)
+    parser.add_argument("--independent-no-answer", action="store_true", help="Add a binary loss to the existing NULL score.")
+    parser.add_argument("--no-answer-loss-weight", type=float, default=1.0)
     parser.add_argument(
         "--answerable-fraction",
         type=float,
@@ -419,7 +477,7 @@ def main() -> None:
                 cursor += args.batch_size
             else:
                 indices = sample_indices(step)
-            source, valid, context, gold_start, gold_end, _ = batch(train_rows, indices, device)
+            source, valid, context, gold_start, gold_end, answerable = batch(train_rows, indices, device)
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type="cuda", dtype=precision, enabled=precision is not None and device.type == "cuda"):
                 output = model(source, valid, context)
@@ -429,9 +487,14 @@ def main() -> None:
                 extraction_loss, extraction_start_loss, extraction_end_loss = independent_extraction_loss(
                     output, auxiliary_start, auxiliary_end, auxiliary_available
                 )
-                loss = joint_loss + (args.extraction_loss_weight * extraction_loss if args.independent_extraction else 0.0)
+                no_answer_loss, _ = independent_no_answer_loss(output, answerable)
+                loss = joint_loss
+                if args.independent_extraction:
+                    loss = loss + args.extraction_loss_weight * extraction_loss
+                if args.independent_no_answer:
+                    loss = loss + args.no_answer_loss_weight * no_answer_loss
             if not torch.isfinite(loss):
-                log({"train/nonfinite_batch": 1.0, "train/joint_loss": float(joint_loss.detach()), "train/extraction_loss": float(extraction_loss.detach())}, step)
+                log({"train/nonfinite_batch": 1.0, "train/joint_loss": float(joint_loss.detach()), "train/extraction_loss": float(extraction_loss.detach()), "train/no_answer_loss": float(no_answer_loss.detach())}, step)
                 optimizer.zero_grad(set_to_none=True)
                 continue
             loss.backward()
@@ -450,7 +513,7 @@ def main() -> None:
                     max_rows=args.quick_eval_rows,
                     reader_only=args.reader_only,
                 )
-                log({"train/loss": float(loss.detach()), "train/joint_loss": float(joint_loss.detach()), "train/extraction_loss": float(extraction_loss.detach()), "train/start_loss": float(start_loss.detach()), "train/end_loss": float(end_loss.detach()), "train/extraction_start_loss": float(extraction_start_loss.detach()), "train/extraction_end_loss": float(extraction_end_loss.detach()), "train/grad_norm": float(grad_norm), **{f"quick/{key}": value for key, value in quick.items()}}, step)
+                log({"train/loss": float(loss.detach()), "train/joint_loss": float(joint_loss.detach()), "train/extraction_loss": float(extraction_loss.detach()), "train/no_answer_loss": float(no_answer_loss.detach()), "train/start_loss": float(start_loss.detach()), "train/end_loss": float(end_loss.detach()), "train/extraction_start_loss": float(extraction_start_loss.detach()), "train/extraction_end_loss": float(extraction_end_loss.detach()), "train/grad_norm": float(grad_norm), **{f"quick/{key}": value for key, value in quick.items()}}, step)
             if step % args.full_eval_every == 0 or step == args.max_steps:
                 full = evaluate(
                     model,
