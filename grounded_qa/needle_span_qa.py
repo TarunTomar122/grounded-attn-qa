@@ -73,15 +73,17 @@ def span_null_loss(
 
 
 @torch.no_grad()
-def best_source_spans(
+def best_spans_from_logits(
     start_logits: torch.Tensor,
     end_logits: torch.Tensor,
     *,
     max_answer_length: int = 30,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Return best zero-based source start/end and their joint score."""
-    starts = start_logits.float()
-    ends = end_logits.float()
+    has_null: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return best source start/end, its score, and NULL-minus-span margin."""
+    source_offset = 1 if has_null else 0
+    starts = start_logits[:, source_offset:].float()
+    ends = end_logits[:, source_offset:].float()
     batch, length = starts.shape
     best_start = torch.zeros(batch, dtype=torch.long, device=starts.device)
     best_end = torch.zeros(batch, dtype=torch.long, device=starts.device)
@@ -92,9 +94,14 @@ def best_source_spans(
         values, offsets = scores.max(dim=1)
         better = values > best_score
         best_score = torch.where(better, values, best_score)
-        best_start = torch.where(better, torch.full_like(best_start, start), best_start)
-        best_end = torch.where(better, start + offsets, best_end)
-    return best_start, best_end, best_score
+        best_start = torch.where(better, torch.full_like(best_start, start + 1), best_start)
+        best_end = torch.where(better, start + 1 + offsets, best_end)
+    null_score = (
+        start_logits[:, 0].float() + end_logits[:, 0].float()
+        if has_null
+        else torch.zeros_like(best_score)
+    )
+    return best_start, best_end, best_score, null_score - best_score
 
 
 @torch.no_grad()
@@ -103,14 +110,7 @@ def best_spans(
     *,
     max_answer_length: int = 30,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Return best source start/end, its score, and NULL-minus-span margin."""
-    best_start, best_end, best_score = best_source_spans(
-        output.start_logits[:, 1:], output.end_logits[:, 1:], max_answer_length=max_answer_length
-    )
-    best_start = best_start + 1
-    best_end = best_end + 1
-    null_score = output.start_logits[:, 0].float() + output.end_logits[:, 0].float()
-    return best_start, best_end, best_score, null_score - best_score
+    return best_spans_from_logits(output.start_logits, output.end_logits, max_answer_length=max_answer_length)
 
 
 def threshold_predictions(

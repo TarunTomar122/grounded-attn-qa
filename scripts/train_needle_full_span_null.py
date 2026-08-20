@@ -9,11 +9,8 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from grounded_qa.needle_full_span_qa import (
-    NeedleFullSpanNullModel,
-    load_compatible_state_dict,
-)
-from grounded_qa.needle_span_qa import best_source_spans, best_spans, span_null_loss
+from grounded_qa.needle_full_span_qa import NeedleFullSpanNullModel
+from grounded_qa.needle_span_qa import best_spans, best_spans_from_logits, span_null_loss
 from grounded_qa.needle_tokenizer import NeedleTokenizer
 from grounded_qa.needleish import NeedleConfig, load_public_checkpoint
 from scripts.evaluate_needle_span_null import score, summarize
@@ -22,7 +19,11 @@ from scripts.train_needle_span_null import answer_text, batch, load_metadata, lo
 
 def model_and_optimizer(args: argparse.Namespace, device: torch.device) -> tuple[NeedleFullSpanNullModel, torch.optim.Optimizer]:
     model = NeedleFullSpanNullModel(NeedleConfig.public_checkpoint()).to(device)
-    load_public_checkpoint(model.backbone, args.checkpoint)
+    if args.checkpoint.suffix == ".safetensors":
+        load_public_checkpoint(model.backbone, args.checkpoint)
+    else:
+        state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        model.load_state_dict(state["model"], strict=False)
     optimizer = torch.optim.AdamW(
         [
             {"params": model.backbone.parameters(), "lr": args.backbone_lr},
@@ -30,12 +31,12 @@ def model_and_optimizer(args: argparse.Namespace, device: torch.device) -> tuple
                 "params": [
                     *model.start_pointer.parameters(),
                     *model.end_pointer.parameters(),
-                    *model.independent_start_pointer.parameters(),
-                    *model.independent_end_pointer.parameters(),
                     model.null_start_key,
                     model.null_end_key,
                     model.null_start_bias,
                     model.null_end_bias,
+                    *model.extraction_start_pointer.parameters(),
+                    *model.extraction_end_pointer.parameters(),
                 ],
                 "lr": args.head_lr,
             },
@@ -82,22 +83,31 @@ def span_only_loss(
     return start_loss + end_loss, start_loss, end_loss
 
 
-def independent_span_loss(
+def independent_extraction_loss(
     output,
     gold_start: torch.Tensor,
     gold_end: torch.Tensor,
     answerable: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Train source-only span heads on answerable rows; there is no NULL class."""
-    mask = answerable.bool()
-    if not mask.any():
-        zero = output.independent_start_logits.new_zeros((), dtype=torch.float32)
+    """Train the source-only extraction head without exposing it to NULL."""
+    answerable = answerable.bool()
+    if not answerable.any():
+        zero = output.extraction_start_logits.new_zeros((), dtype=torch.float32)
         return zero, zero, zero
-    start_loss = F.cross_entropy(
-        output.independent_start_logits[mask].float(), gold_start[mask] - 1
-    )
-    end_loss = F.cross_entropy(output.independent_end_logits[mask].float(), gold_end[mask] - 1)
+    start_loss = F.cross_entropy(output.extraction_start_logits[answerable].float(), gold_start[answerable] - 1)
+    end_loss = F.cross_entropy(output.extraction_end_logits[answerable].float(), gold_end[answerable] - 1)
     return start_loss + end_loss, start_loss, end_loss
+
+
+def auxiliary_targets(
+    rows: dict[str, torch.Tensor],
+    indices: torch.Tensor,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    starts = rows.get("auxiliary_start", rows["gold_start"])[indices].to(device=device, non_blocking=True)
+    ends = rows.get("auxiliary_end", rows["gold_end"])[indices].to(device=device, non_blocking=True)
+    available = rows.get("auxiliary_available", rows["answerable"])[indices].to(device=device, non_blocking=True)
+    return starts, ends, available
 
 
 @torch.inference_mode()
@@ -111,6 +121,7 @@ def measure_gate(
     model.eval()
     has_rows = no_rows = 0
     has_start = has_end = no_start = no_end = 0
+    extraction_start = extraction_end = 0
     for offset in range(0, len(indices), batch_size):
         chunk = indices[offset : offset + batch_size]
         source, valid, context, gold_start, gold_end, answerable = batch(rows, chunk, device)
@@ -123,6 +134,8 @@ def measure_gate(
         no_rows += int(no.sum())
         has_start += int((predicted_start[has] == gold_start[has]).sum())
         has_end += int((predicted_end[has] == gold_end[has]).sum())
+        extraction_start += int((output.extraction_start_logits[has].argmax(dim=1) + 1 == gold_start[has]).sum())
+        extraction_end += int((output.extraction_end_logits[has].argmax(dim=1) + 1 == gold_end[has]).sum())
         no_start += int((predicted_start[no] == 0).sum())
         no_end += int((predicted_end[no] == 0).sum())
     return {
@@ -130,6 +143,8 @@ def measure_gate(
         "has_answer/end_accuracy": has_end / max(has_rows, 1),
         "no_answer/start_accuracy": no_start / max(no_rows, 1),
         "no_answer/end_accuracy": no_end / max(no_rows, 1),
+        "extraction/start_accuracy": extraction_start / max(has_rows, 1),
+        "extraction/end_accuracy": extraction_end / max(has_rows, 1),
         "rows": float(len(indices)),
     }
 
@@ -191,17 +206,16 @@ def evaluate(
     *,
     max_rows: int | None = None,
     reader_only: bool = False,
-    independent_span_weight: float = 0.0,
 ) -> dict[str, float]:
     model.eval()
     limit = min(max_rows, len(metadata)) if max_rows is not None else len(metadata)
     losses: list[float] = []
     raw_predictions: list[str] = []
-    independent_raw_predictions: list[str] = []
     margins: list[float] = []
     has_rows = no_rows = 0
     has_start = has_end = no_start = no_end = 0
-    independent_has_start = independent_has_end = 0
+    extraction_start = extraction_end = 0
+    extraction_predictions: list[str] = []
     for offset in range(0, limit, batch_size):
         indices = torch.arange(offset, min(offset + batch_size, limit))
         source, valid, context, gold_start, gold_end, answerable = batch(rows, indices, device)
@@ -211,11 +225,6 @@ def evaluate(
                 loss, _, _ = span_only_loss(output, gold_start, gold_end, answerable)
             else:
                 loss, _, _ = span_null_loss(output, gold_start, gold_end)
-            if independent_span_weight:
-                independent_loss, _, _ = independent_span_loss(
-                    output, gold_start, gold_end, answerable
-                )
-                loss = loss + independent_span_weight * independent_loss
         losses.append(float(loss))
         best_start, best_end, _, margin = best_spans(output)
         if reader_only:
@@ -226,51 +235,44 @@ def evaluate(
             argmax_end = output.end_logits.argmax(dim=1)
         has = answerable.bool()
         no = ~has
-        independent_start, independent_end, _ = best_source_spans(
-            output.independent_start_logits, output.independent_end_logits
-        )
-        independent_has_start += int(
-            (independent_start[has] + 1 == gold_start[has]).sum()
-        )
-        independent_has_end += int((independent_end[has] + 1 == gold_end[has]).sum())
         has_rows += int(has.sum())
         no_rows += int(no.sum())
         has_start += int((argmax_start[has] == gold_start[has]).sum())
         has_end += int((argmax_end[has] == gold_end[has]).sum())
+        extraction_start += int((output.extraction_start_logits[has].argmax(dim=1) + 1 == gold_start[has]).sum())
+        extraction_end += int((output.extraction_end_logits[has].argmax(dim=1) + 1 == gold_end[has]).sum())
         no_start += int((argmax_start[no] == 0).sum())
         no_end += int((argmax_end[no] == 0).sum())
         for local, start, end, row_margin in zip(range(len(indices)), best_start.tolist(), best_end.tolist(), margin.tolist()):
             raw_predictions.append(answer_text(tokenizer, source[local].cpu(), start, end))
             margins.append(float(row_margin))
-        for local, start, end in zip(range(len(indices)), independent_start.tolist(), independent_end.tolist()):
-            independent_raw_predictions.append(
-                answer_text(tokenizer, source[local].cpu(), start + 1, end + 1)
-            )
+        extraction_best_start, extraction_best_end, _, _ = best_spans_from_logits(
+            output.extraction_start_logits,
+            output.extraction_end_logits,
+            has_null=False,
+        )
+        for local, start, end in zip(range(len(indices)), extraction_best_start.tolist(), extraction_best_end.tolist()):
+            extraction_predictions.append(answer_text(tokenizer, source[local].cpu(), start, end))
 
     eval_metadata = metadata[:limit]
     best_threshold = threshold_scores(margins, raw_predictions, eval_metadata)
     threshold_summary = summarize(eval_metadata, raw_predictions, margins, best_threshold["threshold"])
     raw_summary = summarize(eval_metadata, raw_predictions, [0.0] * len(margins), float("inf"))
-    independent_raw_summary = summarize(
-        eval_metadata,
-        independent_raw_predictions,
-        [0.0] * len(independent_raw_predictions),
-        float("inf"),
-    )
+    extraction_summary = summarize(eval_metadata, extraction_predictions, [0.0] * len(margins), float("inf"))
     has_margin = [margins[i] for i, row in enumerate(eval_metadata) if row["answerable"]]
     no_margin = [margins[i] for i, row in enumerate(eval_metadata) if not row["answerable"]]
     return {
         "loss": sum(losses) / max(len(losses), 1),
         "has_answer/start_accuracy": has_start / max(has_rows, 1),
         "has_answer/end_accuracy": has_end / max(has_rows, 1),
+        "extraction/start_accuracy": extraction_start / max(has_rows, 1),
+        "extraction/end_accuracy": extraction_end / max(has_rows, 1),
+        "extraction/forced_has_answer_em": extraction_summary.get("has_answer_em", 0.0),
+        "extraction/forced_has_answer_f1": extraction_summary.get("has_answer_f1", 0.0),
         "no_answer/start_accuracy": no_start / max(no_rows, 1),
         "no_answer/end_accuracy": no_end / max(no_rows, 1),
         "raw/has_answer_em": raw_summary.get("has_answer_em", 0.0),
         "raw/has_answer_f1": raw_summary.get("has_answer_f1", 0.0),
-        "independent/raw/has_answer_em": independent_raw_summary.get("has_answer_em", 0.0),
-        "independent/raw/has_answer_f1": independent_raw_summary.get("has_answer_f1", 0.0),
-        "independent/has_answer/start_accuracy": independent_has_start / max(has_rows, 1),
-        "independent/has_answer/end_accuracy": independent_has_end / max(has_rows, 1),
         "threshold": best_threshold["threshold"],
         "threshold/em": threshold_summary.get("all_em", 0.0),
         "threshold/f1": threshold_summary.get("all_f1", 0.0),
@@ -313,12 +315,8 @@ def main() -> None:
     parser.add_argument("--wandb-run-name", default="needle-full-decoder-span-null-squad2")
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--reader-only", action="store_true", help="Train answerable rows with NULL excluded from the span loss.")
-    parser.add_argument(
-        "--independent-span-weight",
-        type=float,
-        default=0.0,
-        help="Add source-only answer-span loss on answerable rows while retaining the joint NULL loss.",
-    )
+    parser.add_argument("--independent-extraction", action="store_true", help="Add a source-only span objective alongside the joint span/NULL objective.")
+    parser.add_argument("--extraction-loss-weight", type=float, default=1.0)
     parser.add_argument(
         "--answerable-fraction",
         type=float,
@@ -362,9 +360,8 @@ def main() -> None:
         start_step = 0
         if args.resume:
             state = torch.load(args.resume, map_location="cpu", weights_only=False)
-            old_checkpoint = load_compatible_state_dict(model, state["model"])
-            if not old_checkpoint:
-                optimizer.load_state_dict(state["optimizer"])
+            model.load_state_dict(state["model"])
+            optimizer.load_state_dict(state["optimizer"])
             start_step = int(state["step"])
 
         quick_zero = evaluate(
@@ -377,7 +374,6 @@ def main() -> None:
             precision,
             max_rows=args.quick_eval_rows,
             reader_only=args.reader_only,
-            independent_span_weight=args.independent_span_weight,
         )
         log({f"quick/{key}": value for key, value in quick_zero.items()}, start_step)
         best_f1 = -1.0
@@ -423,19 +419,21 @@ def main() -> None:
                 cursor += args.batch_size
             else:
                 indices = sample_indices(step)
-            source, valid, context, gold_start, gold_end, answerable = batch(train_rows, indices, device)
+            source, valid, context, gold_start, gold_end, _ = batch(train_rows, indices, device)
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type="cuda", dtype=precision, enabled=precision is not None and device.type == "cuda"):
                 output = model(source, valid, context)
                 loss_fn = span_only_loss if args.reader_only else span_null_loss
-                loss, start_loss, end_loss = loss_fn(output, gold_start, gold_end)
-                if args.independent_span_weight:
-                    independent_loss, independent_start_loss, independent_end_loss = independent_span_loss(
-                        output, gold_start, gold_end, answerable
-                    )
-                    loss = loss + args.independent_span_weight * independent_loss
-                else:
-                    independent_loss = independent_start_loss = independent_end_loss = loss.new_zeros(())
+                joint_loss, start_loss, end_loss = loss_fn(output, gold_start, gold_end)
+                auxiliary_start, auxiliary_end, auxiliary_available = auxiliary_targets(train_rows, indices, device)
+                extraction_loss, extraction_start_loss, extraction_end_loss = independent_extraction_loss(
+                    output, auxiliary_start, auxiliary_end, auxiliary_available
+                )
+                loss = joint_loss + (args.extraction_loss_weight * extraction_loss if args.independent_extraction else 0.0)
+            if not torch.isfinite(loss):
+                log({"train/nonfinite_batch": 1.0, "train/joint_loss": float(joint_loss.detach()), "train/extraction_loss": float(extraction_loss.detach())}, step)
+                optimizer.zero_grad(set_to_none=True)
+                continue
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -451,9 +449,8 @@ def main() -> None:
                     precision,
                     max_rows=args.quick_eval_rows,
                     reader_only=args.reader_only,
-                    independent_span_weight=args.independent_span_weight,
                 )
-                log({"train/loss": float(loss), "train/start_loss": float(start_loss), "train/end_loss": float(end_loss), "train/independent_loss": float(independent_loss), "train/independent_start_loss": float(independent_start_loss), "train/independent_end_loss": float(independent_end_loss), "train/grad_norm": float(grad_norm), **{f"quick/{key}": value for key, value in quick.items()}}, step)
+                log({"train/loss": float(loss.detach()), "train/joint_loss": float(joint_loss.detach()), "train/extraction_loss": float(extraction_loss.detach()), "train/start_loss": float(start_loss.detach()), "train/end_loss": float(end_loss.detach()), "train/extraction_start_loss": float(extraction_start_loss.detach()), "train/extraction_end_loss": float(extraction_end_loss.detach()), "train/grad_norm": float(grad_norm), **{f"quick/{key}": value for key, value in quick.items()}}, step)
             if step % args.full_eval_every == 0 or step == args.max_steps:
                 full = evaluate(
                     model,
@@ -464,7 +461,6 @@ def main() -> None:
                     args.batch_size,
                     precision,
                     reader_only=args.reader_only,
-                    independent_span_weight=args.independent_span_weight,
                 )
                 log({f"val/{key}": value for key, value in full.items()}, step)
                 if full["threshold/f1"] > best_f1:
